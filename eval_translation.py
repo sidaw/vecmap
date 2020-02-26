@@ -54,9 +54,11 @@ def main():
     parser.add_argument('--inv_sample', default=None, type=int, help='use a random subset of the source vocabulary for the inverse computations (only compatible with inverted softmax)')
     parser.add_argument('-k', '--neighborhood', default=10, type=int, help='the neighborhood size (only compatible with csls)')
     parser.add_argument('--dot', action='store_true', help='use the dot product in the similarity computations instead of the cosine')
+    parser.add_argument('--verbose', action='store_true', help='verbose, print output')
     parser.add_argument('--encoding', default='utf-8', help='the character encoding for input/output (defaults to utf-8)')
     parser.add_argument('--seed', type=int, default=0, help='the random seed')
     parser.add_argument('--precision', choices=['fp16', 'fp32', 'fp64'], default='fp32', help='the floating-point precision (defaults to fp32)')
+    parser.add_argument('--threshold', default=0, type=int, help='vocab limit')
     parser.add_argument('--cuda', action='store_true', help='use cuda (requires cupy)')
     args = parser.parse_args()
 
@@ -71,8 +73,8 @@ def main():
     # Read input embeddings
     srcfile = open(args.src_embeddings, encoding=args.encoding, errors='surrogateescape')
     trgfile = open(args.trg_embeddings, encoding=args.encoding, errors='surrogateescape')
-    src_words, x = embeddings.read(srcfile, dtype=dtype)
-    trg_words, z = embeddings.read(trgfile, dtype=dtype)
+    src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.threshold)
+    trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.threshold)
 
     # NumPy/CuPy management
     if args.cuda:
@@ -94,6 +96,8 @@ def main():
     # Build word to index map
     src_word2ind = {word: i for i, word in enumerate(src_words)}
     trg_word2ind = {word: i for i, word in enumerate(trg_words)}
+    trg_ind2word = {i: word for i, word in enumerate(trg_words)}
+    src_ind2word = {i: word for i, word in enumerate(src_words)}
 
     # Read dictionary and compute coverage
     f = open(args.dictionary, encoding=args.encoding, errors='surrogateescape')
@@ -163,6 +167,9 @@ def main():
             for k in range(j-i):
                 translation[src[i+k]] = nn[k]
 
+    if args.verbose:
+        for i in src:
+            print(f'{src_ind2word[i]}\t{trg_ind2word[translation[i]]}\t{"|".join([trg_ind2word[j] for j in src2trg[i]])}')
     # Compute accuracy
     accuracy = np.mean([1 if translation[i] in src2trg[i] else 0 for i in src])
     print('Coverage:{0:7.2%}  Accuracy:{1:7.2%}'.format(coverage, accuracy))

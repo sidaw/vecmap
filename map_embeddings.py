@@ -69,6 +69,7 @@ def main():
     recommended_type.add_argument('--supervised', metavar='DICTIONARY', help='recommended if you have a large training dictionary')
     recommended_type.add_argument('--semi_supervised', metavar='DICTIONARY', help='recommended if you have a small seed dictionary')
     recommended_type.add_argument('--identical', action='store_true', help='recommended if you have no seed dictionary but can rely on identical words')
+    recommended_type.add_argument('--identical_custom', action='store_true', help='identical without self')
     recommended_type.add_argument('--unsupervised', action='store_true', help='recommended if you have no seed dictionary and do not want to rely on identical words')
     recommended_type.add_argument('--acl2018', action='store_true', help='reproduce our ACL 2018 system')
     recommended_type.add_argument('--aaai2018', metavar='DICTIONARY', help='reproduce our AAAI 2018 system')
@@ -116,6 +117,8 @@ def main():
         parser.set_defaults(init_dictionary=args.semi_supervised, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
     if args.identical:
         parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
+    if args.identical_custom:
+        parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=False, vocabulary_cutoff=50000, csls_neighborhood=0)
     if args.unsupervised or args.acl2018:
         parser.set_defaults(init_unsupervised=True, unsupervised_vocab=4000, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
     if args.aaai2018:
@@ -144,8 +147,8 @@ def main():
     # Read input embeddings
     srcfile = open(args.src_input, encoding=args.encoding, errors='surrogateescape')
     trgfile = open(args.trg_input, encoding=args.encoding, errors='surrogateescape')
-    src_words, x = embeddings.read(srcfile, dtype=dtype)
-    trg_words, z = embeddings.read(trgfile, dtype=dtype)
+    src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.vocabulary_cutoff)
+    trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.vocabulary_cutoff)
 
     # NumPy/CuPy management
     if args.cuda:
@@ -172,15 +175,21 @@ def main():
     trg_indices = []
     if args.init_unsupervised:
         sim_size = min(x.shape[0], z.shape[0]) if args.unsupervised_vocab <= 0 else min(x.shape[0], z.shape[0], args.unsupervised_vocab)
-        u, s, vt = xp.linalg.svd(x[:sim_size], full_matrices=False)
-        xsim = (u*s).dot(u.T)
-        u, s, vt = xp.linalg.svd(z[:sim_size], full_matrices=False)
-        zsim = (u*s).dot(u.T)
+        feat_size = 4000 
+        # sim_mat = x[:sim_size, :] @ x[:feat_size, :]
+        u, s, vt = xp.linalg.svd(x[:feat_size], full_matrices=False)
+        xsim = x[:sim_size, :] @ vt.T @ u.T
+        u, s, vt = xp.linalg.svd(z[:feat_size], full_matrices=False)
+        zsim = z[:sim_size, :] @ vt.T @ u.T
         del u, s, vt
         xsim.sort(axis=1)
         zsim.sort(axis=1)
-        embeddings.normalize(xsim, args.normalize)
-        embeddings.normalize(zsim, args.normalize)
+        # l = 100; u = 100
+        # inds = list(range(0, l)) + list(range(xsim.shape[1]-u, xsim.shape[1]))
+        # xsim = xsim[:, inds]
+        # zsim = zsim[:, inds]
+        embeddings.normalize(np.power(np.abs(xsim), 0.5), args.normalize)
+        embeddings.normalize(np.power(np.abs(zsim), 0.5), args.normalize)
         sim = xsim.dot(zsim.T)
         if args.csls_neighborhood > 0:
             knn_sim_fwd = topk_mean(sim, k=args.csls_neighborhood)
@@ -281,12 +290,15 @@ def main():
         # Update the embedding mapping
         if args.orthogonal or not end:  # orthogonal mapping
             u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
-            w = vt.T.dot(u.T)
+            w = vt.T[:, 0:9].dot(u[:, 0:9].T)
             x.dot(w, out=xw)
             zw[:] = z
         elif args.unconstrained:  # unconstrained mapping
-            x_pseudoinv = xp.linalg.inv(x[src_indices].T.dot(x[src_indices])).dot(x[src_indices].T)
-            w = x_pseudoinv.dot(z[trg_indices])
+            print('unconstrained')
+            # x_pseudoinv = xp.linalg.inv(x[src_indices].T.dot(x[src_indices])).dot(x[src_indices].T)
+            # w = x_pseudoinv.dot(z[trg_indices])
+            w = np.linalg.lstsq(x[src_indices], z[trg_indices])[0]
+            print(w.shape)
             x.dot(w, out=xw)
             zw[:] = z
         else:  # advanced mapping
