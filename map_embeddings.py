@@ -175,21 +175,15 @@ def main():
     trg_indices = []
     if args.init_unsupervised:
         sim_size = min(x.shape[0], z.shape[0]) if args.unsupervised_vocab <= 0 else min(x.shape[0], z.shape[0], args.unsupervised_vocab)
-        feat_size = 4000 
-        # sim_mat = x[:sim_size, :] @ x[:feat_size, :]
-        u, s, vt = xp.linalg.svd(x[:feat_size], full_matrices=False)
-        xsim = x[:sim_size, :] @ vt.T @ u.T
-        u, s, vt = xp.linalg.svd(z[:feat_size], full_matrices=False)
-        zsim = z[:sim_size, :] @ vt.T @ u.T
+        u, s, vt = xp.linalg.svd(x[:sim_size], full_matrices=False)
+        xsim = (u*s).dot(u.T)
+        u, s, vt = xp.linalg.svd(z[:sim_size], full_matrices=False)
+        zsim = (u*s).dot(u.T)
         del u, s, vt
         xsim.sort(axis=1)
         zsim.sort(axis=1)
-        # l = 100; u = 100
-        # inds = list(range(0, l)) + list(range(xsim.shape[1]-u, xsim.shape[1]))
-        # xsim = xsim[:, inds]
-        # zsim = zsim[:, inds]
-        embeddings.normalize(np.power(np.abs(xsim), 0.5), args.normalize)
-        embeddings.normalize(np.power(np.abs(zsim), 0.5), args.normalize)
+        embeddings.normalize(xsim, args.normalize)
+        embeddings.normalize(zsim, args.normalize)
         sim = xsim.dot(zsim.T)
         if args.csls_neighborhood > 0:
             knn_sim_fwd = topk_mean(sim, k=args.csls_neighborhood)
@@ -290,15 +284,13 @@ def main():
         # Update the embedding mapping
         if args.orthogonal or not end:  # orthogonal mapping
             u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
-            w = vt.T[:, 0:9].dot(u[:, 0:9].T)
+            w = vt.T.dot(u.T)
             x.dot(w, out=xw)
             zw[:] = z
         elif args.unconstrained:  # unconstrained mapping
-            print('unconstrained')
             # x_pseudoinv = xp.linalg.inv(x[src_indices].T.dot(x[src_indices])).dot(x[src_indices].T)
             # w = x_pseudoinv.dot(z[trg_indices])
             w = np.linalg.lstsq(x[src_indices], z[trg_indices])[0]
-            print(w.shape)
             x.dot(w, out=xw)
             zw[:] = z
         else:  # advanced mapping
