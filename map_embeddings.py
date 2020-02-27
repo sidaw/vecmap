@@ -215,7 +215,10 @@ def main():
     else:
         f = open(args.init_dictionary, encoding=args.encoding, errors='surrogateescape')
         for line in f:
-            src, trg = line.split()
+            try:
+                src, trg = line.split()
+            except ValueError:
+                continue
             try:
                 src_ind = src_word2ind[src]
                 trg_ind = trg_word2ind[trg]
@@ -231,7 +234,10 @@ def main():
         oov = set()
         vocab = set()
         for line in f:
-            src, trg = line.split()
+            try:
+                src, trg = line.split()
+            except ValueError:
+                continue
             try:
                 src_ind = src_word2ind[src]
                 trg_ind = trg_word2ind[trg]

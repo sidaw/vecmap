@@ -53,16 +53,14 @@ def main():
     parser.add_argument('--inv_temperature', default=1, type=float, help='the inverse temperature (only compatible with inverted softmax)')
     parser.add_argument('--inv_sample', default=None, type=int, help='use a random subset of the source vocabulary for the inverse computations (only compatible with inverted softmax)')
     parser.add_argument('-k', '--neighborhood', default=10, type=int, help='the neighborhood size (only compatible with csls)')
+    parser.add_argument('--nbest', default=3, type=int, help='number of candidates to get')
     parser.add_argument('--dot', action='store_true', help='use the dot product in the similarity computations instead of the cosine')
-    parser.add_argument('--verbose', action='store_true', help='verbose, print output')
+    parser.add_argument('--verbose', action='store_true', help='verbose, print more information')
     parser.add_argument('--encoding', default='utf-8', help='the character encoding for input/output (defaults to utf-8)')
     parser.add_argument('--seed', type=int, default=0, help='the random seed')
     parser.add_argument('--precision', choices=['fp16', 'fp32', 'fp64'], default='fp32', help='the floating-point precision (defaults to fp32)')
-    parser.add_argument('--threshold', default=0, type=int, help='vocab limit')
+    parser.add_argument('--threshold', default=0, type=int, help='vocab limit for reading the embedding')
     parser.add_argument('--cuda', action='store_true', help='use cuda (requires cupy)')
-    
-
-    parser.add_argument('--threshold', default=0, type=int, help='vocab limit')
     args = parser.parse_args()
 
     # Choose the right dtype for the desired precision
@@ -98,85 +96,42 @@ def main():
 
     # Build word to index map
     src_word2ind = {word: i for i, word in enumerate(src_words)}
-    trg_word2ind = {word: i for i, word in enumerate(trg_words)}
     trg_ind2word = {i: word for i, word in enumerate(trg_words)}
     src_ind2word = {i: word for i, word in enumerate(src_words)}
 
     # Read dictionary and compute coverage
     f = open(args.dictionary, encoding=args.encoding, errors='surrogateescape')
-    src2trg = collections.defaultdict(set)
     oov = set()
     vocab = set()
+    src = [] 
     for line in f:
-        src, trg = line.split()
+        if '\t' in line:
+            w, _ = line.split()
+        else:
+            w = line.strip()
+        if w in vocab:
+            continue
         try:
-            src_ind = src_word2ind[src]
-            trg_ind = trg_word2ind[trg]
-            src2trg[src_ind].add(trg_ind)
-            vocab.add(src)
+            src.append(src_word2ind[w])
+            vocab.add(w)
         except KeyError:
-            oov.add(src)
-    src = list(src2trg.keys())
-    oov -= vocab  # If one of the translation options is in the vocabulary, then the entry is not an oov
-    coverage = len(src2trg) / (len(src2trg) + len(oov))
+            oov.add(w)
+    
+    if args.verbose:
+        print(f'{len(oov)} oovs: ' + '|'.join(list(oov), file=sys.stderr))
 
-    # Find translations
-    translation = collections.defaultdict(int)
-    if args.retrieval == 'nn':  # Standard nearest neighbor
+    if args.retrieval == 'nn': # Standard nearest neighbor
         for i in range(0, len(src), BATCH_SIZE):
             j = min(i + BATCH_SIZE, len(src))
             similarities = x[src[i:j]].dot(z.T)
-            nn = similarities.argmax(axis=1).tolist()
-            for k in range(j-i):
-                translation[src[i+k]] = nn[k]
-    elif args.retrieval == 'invnn':  # Inverted nearest neighbor
-        best_rank = np.full(len(src), x.shape[0], dtype=int)
-        best_sim = np.full(len(src), -100, dtype=dtype)
-        for i in range(0, z.shape[0], BATCH_SIZE):
-            j = min(i + BATCH_SIZE, z.shape[0])
-            similarities = z[i:j].dot(x.T)
-            ind = (-similarities).argsort(axis=1)
-            ranks = asnumpy(ind.argsort(axis=1)[:, src])
-            sims = asnumpy(similarities[:, src])
-            for k in range(i, j):
-                for l in range(len(src)):
-                    rank = ranks[k-i, l]
-                    sim = sims[k-i, l]
-                    if rank < best_rank[l] or (rank == best_rank[l] and sim > best_sim[l]):
-                        best_rank[l] = rank
-                        best_sim[l] = sim
-                        translation[src[l]] = k
-    elif args.retrieval == 'invsoftmax':  # Inverted softmax
-        sample = xp.arange(x.shape[0]) if args.inv_sample is None else xp.random.randint(0, x.shape[0], args.inv_sample)
-        partition = xp.zeros(z.shape[0])
-        for i in range(0, len(sample), BATCH_SIZE):
-            j = min(i + BATCH_SIZE, len(sample))
-            partition += xp.exp(args.inv_temperature*z.dot(x[sample[i:j]].T)).sum(axis=1)
-        for i in range(0, len(src), BATCH_SIZE):
-            j = min(i + BATCH_SIZE, len(src))
-            p = xp.exp(args.inv_temperature*x[src[i:j]].dot(z.T)) / partition
-            nn = p.argmax(axis=1).tolist()
-            for k in range(j-i):
-                translation[src[i+k]] = nn[k]
-    elif args.retrieval == 'csls':  # Cross-domain similarity local scaling
-        knn_sim_bwd = xp.zeros(z.shape[0])
-        for i in range(0, z.shape[0], BATCH_SIZE):
-            j = min(i + BATCH_SIZE, z.shape[0])
-            knn_sim_bwd[i:j] = topk_mean(z[i:j].dot(x.T), k=args.neighborhood, inplace=True)
-        for i in range(0, len(src), BATCH_SIZE):
-            j = min(i + BATCH_SIZE, len(src))
-            similarities = 2*x[src[i:j]].dot(z.T) - knn_sim_bwd  # Equivalent to the real CSLS scores for NN
-            nn = similarities.argmax(axis=1).tolist()
-            for k in range(j-i):
-                translation[src[i+k]] = nn[k]
-
-    if args.verbose:
-        for i in src:
-            print(f'{src_ind2word[i]}\t{trg_ind2word[translation[i]]}\t{"|".join([trg_ind2word[j] for j in src2trg[i]])}')
-    # Compute accuracy
-    accuracy = np.mean([1 if translation[i] in src2trg[i] else 0 for i in src])
-    print('Coverage:{0:7.2%}  Accuracy:{1:7.2%}'.format(coverage, accuracy))
-
+            nn = (-similarities).argpartition(args.nbest, axis=1)
+            for k in range(j - i):
+                wind = src[i + k]
+                w = src_ind2word[wind]
+                for tind in nn[k, :args.nbest]:
+                    wt = trg_ind2word[tind]
+                    st = similarities[k, tind]
+                    print(f'{w}\t{wt}\t{st:.3f}')
 
 if __name__ == '__main__':
     main()
