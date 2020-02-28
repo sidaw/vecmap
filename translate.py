@@ -117,8 +117,8 @@ def main():
         except KeyError:
             oov.add(w)
     
-    if args.verbose:
-        print(f'{len(oov)} oovs: ' + '|'.join(list(oov), file=sys.stderr))
+    # if args.verbose:
+        # print(f'{len(oov)} oovs: ' + '|'.join(list(oov)), file=sys.stderr)
 
     if args.retrieval == 'nn': # Standard nearest neighbor
         for i in range(0, len(src), BATCH_SIZE):
@@ -132,6 +132,22 @@ def main():
                     wt = trg_ind2word[tind]
                     st = similarities[k, tind]
                     print(f'{w}\t{wt}\t{st:.3f}')
+    elif args.retrieval == 'csls':  # Cross-domain similarity local scaling
+        knn_sim_bwd = xp.zeros(z.shape[0])
+        for i in range(0, z.shape[0], BATCH_SIZE):
+            j = min(i + BATCH_SIZE, z.shape[0])
+            knn_sim_bwd[i:j] = topk_mean(z[i:j].dot(x.T), k=args.neighborhood, inplace=True)
+        for i in range(0, len(src), BATCH_SIZE):
+            j = min(i + BATCH_SIZE, len(src))
+            similarities = 2*x[src[i:j]].dot(z.T) - knn_sim_bwd  # Equivalent to the real CSLS scores for NN
+            nn = (-similarities).argpartition(args.nbest, axis=1)
+            for k in range(j-i):
+                w = src_ind2word[src[i+k]]
+                for tind in nn[k, :args.nbest]:
+                    wt = trg_ind2word[tind]
+                    st = similarities[k, tind]
+                    print(f'{w}\t{wt}\t{st:.3f}')
+
 
 if __name__ == '__main__':
     main()
