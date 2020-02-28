@@ -55,7 +55,7 @@ def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
 def sample_matches(xw, zw, T, kbest=5):
     # match = (sind, [tinds], weight?)
     matches = []
-    # this is very faiss could be good
+    # this is where faiss could be good
     sims = xw.dot(zw.T)
     topinds = (-sims).argpartition(kbest, axis=1)[:, :kbest]
     for i in range(xw.shape[0]):
@@ -72,7 +72,7 @@ def sample(topinds, topvs, T):
     j = xp.random.choice(topinds, p=topprobs)
     return j
 
-
+@profile
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Map word embeddings in two languages into a shared space')
@@ -369,7 +369,7 @@ def main():
             if args.direction in ('forward', 'union'):
                 for i in range(0, src_size, simfwd.shape[0]):
                     j = min(i + simfwd.shape[0], src_size)
-                    T = np.exp((it - 1) * np.log(1e-3) / (args.maxiter - 1))
+                    T = np.exp((it - 1) * np.log(1e-3) / (args.maxiter))
                     matchesi, sims = sample_matches(xw[i:j], zw[:trg_size], T=T)
                     trg_indices_forward[i:j] = xp.array(list(zip(*matchesi))[1])
                     sims.max(axis=1, out=best_sim_forward[i:j])
@@ -441,7 +441,7 @@ def main():
 
         t = time.time()
         it += 1
-        if it > args.maxiter:
+        if it >= args.maxiter:
             break
 
     # Write mapped embeddings
