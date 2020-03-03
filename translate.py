@@ -133,7 +133,7 @@ def main():
         sim_bwd, _ = embeddings.faiss_knn(z, x, k=args.neighborhood)
         knn_sim_bwd = sim_bwd.mean(axis=1)
         queries = x[src]
-        topvals, topinds = embeddings.faiss_knn(queries, z, k=20)
+        topvals, topinds = embeddings.faiss_knn(queries, z, k=30)
         for i, wind in enumerate(src):
             w = src_ind2word[wind]
             for k, tind in enumerate(topinds[i]):

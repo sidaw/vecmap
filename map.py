@@ -50,12 +50,22 @@ def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
         m[ind0, ind1] = minimum
     return ans / k
 
-def find_matches(matches, xw, zw, T, kbest=5):
+def sample(xw, zw, T, kbest=10):
+    pass
+
+def sample_matches(matches, p=0.3):
+    sampled = {}
+    for k in matches:
+        if np.random.rand() < p:
+            sampled[k] = matches[k]
+    return sampled
+
+def _find_matches(xw, zw, T, kbest=30):
     # match = (sind, tind, weight?)
     topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
     objective = 0
-    eta = 0.01
     # topinds = (-sims).argpartition(kbest, axis=1)[:, :kbest]
+    matches = {} 
     for i in range(xw.shape[0]):
         # topvals = sims[i, topinds[i]]
         topvali = topvals[i]
@@ -63,10 +73,26 @@ def find_matches(matches, xw, zw, T, kbest=5):
         topprobs = softmax(topvali / T)
         j = xp.random.choice(range(kbest), p=topprobs)
         hit = topinds[i, j]
-        if np.random.rand() < 1:
-            matches[(i, hit)] = max(1, matches[(i, hit)])
+        if (i, hit) not in matches:
+            matches[(i, hit)] = 1
+        matches[(i, hit)] = matches[(i, hit)] * 1.1
         # matches[(i, hit)] = (1-eta) * matches[(i, hit)] + eta * topvali[j]
     return matches, objective / xw.shape[0]
+
+def find_matches(matches, xw, zw, T, kbest=30):
+    matches_fwd, obj_fwd = _find_matches(xw, zw, T, kbest=30)
+    matches_rev, obj_rev = _find_matches(zw, xw, T, kbest=30)
+    for m in matches_fwd:
+        if m not in matches:
+            matches[m] = 1
+        matches[m] *= 1.1
+    for r in matches_rev:
+        m = (r[1], r[0])
+        if m not in matches:
+            matches[m] = 1
+        matches[m] *= 1.1
+    return matches, (obj_fwd + obj_rev) / 2
+
 
 def main():
     # Parse command line arguments
@@ -274,9 +300,13 @@ def main():
     # Allocate memory
     xw = xp.empty_like(x)
     zw = xp.empty_like(z)
-    matches = collections.defaultdict(lambda: 0)
+    matches = {} 
     for p in zip(src_indices, trg_indices):
-        matches[p] = 10
+        matches[p] = 5
+    identical = set(src_words).intersection(set(trg_words))
+    for word in identical:
+        p = (src_word2ind[word], trg_word2ind[word])
+        matches[p] = 1
 
     if args.validation is not None:
         simval = xp.empty((len(validation.keys()), z.shape[0]), dtype=dtype)
@@ -286,26 +316,28 @@ def main():
     keep_prob = args.stochastic_initial
     t = time.time()
     while True:
-        indices, weights = [list(a) for a in zip(*matches.items())]
-        weights = xp.array(weights, dtype=dtype)[:, None]
-        src_indices, trg_indices = [list(a) for a in zip(*indices)]
-        
-        if args.orthogonal:
+        def flatten_match(matches):
+            indices, weights = [list(a) for a in zip(*matches.items())]
+            weights = xp.array(weights, dtype=dtype)[:, None]
+            src_indices, trg_indices = [list(a) for a in zip(*indices)]
+            return src_indices, trg_indices, weights
+
+        samp_m = sample_matches(matches, p=0.5)
+        src_indices, trg_indices, weights = flatten_match(samp_m)
+        if args.unconstrained:
+            # w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
+            w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
+        else:
             u, s, vt = xp.linalg.svd((weights * z[trg_indices]).T.dot(x[src_indices]))
+            # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
             w = vt.T.dot(u.T)
             x.dot(w, out=xw)
             zw = z[:]
-        # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
-        elif args.unconstrained:
-            # w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
-            w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
-            x.dot(w, out=xw)
 
-
-        T = np.exp((it - 1) * np.log(1e-3) / (args.maxiter))
-        T = 1
+        T = 10 * np.exp((it - 1) * np.log(1e-3/10) / (args.maxiter))
+        # T = 1
         matches, objective = find_matches(matches, xw, zw, T=T)
-    
+        
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())

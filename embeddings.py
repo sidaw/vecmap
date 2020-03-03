@@ -89,3 +89,13 @@ def faiss_knn(Q, X, k, dist='IP'):
     index.add(X)
     dists, inds = index.search(Q, k)
     return dists, inds
+
+
+def faiss_csls(Q, X, k, dist='IP'):
+    # this k is neighborhood
+    sim_bwd, _ = faiss_knn(X, Q, k=10)
+    knn_sim_bwd = sim_bwd.mean(axis=1)
+    topvals, topinds = faiss_knn(Q, X, k=k)
+    for i in range(topvals.shape[0]):
+        topvals[i] = 2 * topvals[i] - knn_sim_bwd[topinds[i]]
+    return topvals, topinds 
