@@ -49,10 +49,10 @@ def main():
     parser.add_argument('src_embeddings', help='the source language embeddings')
     parser.add_argument('trg_embeddings', help='the target language embeddings')
     parser.add_argument('-d', '--dictionary', default=sys.stdin.fileno(), help='the test dictionary file (defaults to stdin)')
-    parser.add_argument('--retrieval', default='nn', choices=['nn', 'invnn', 'invsoftmax', 'csls'], help='the retrieval method (nn: standard nearest neighbor; invnn: inverted nearest neighbor; invsoftmax: inverted softmax; csls: cross-domain similarity local scaling)')
+    parser.add_argument('--retrieval', default='nn', choices=['nn', 'invnn', 'invsoftmax', 'csls', 'fcsls'], help='the retrieval method (nn: standard nearest neighbor; invnn: inverted nearest neighbor; invsoftmax: inverted softmax; csls: cross-domain similarity local scaling)')
     parser.add_argument('--inv_temperature', default=1, type=float, help='the inverse temperature (only compatible with inverted softmax)')
     parser.add_argument('--inv_sample', default=None, type=int, help='use a random subset of the source vocabulary for the inverse computations (only compatible with inverted softmax)')
-    parser.add_argument('-k', '--neighborhood', default=10, type=int, help='the neighborhood size (only compatible with csls)')
+    parser.add_argument('--neighborhood', default=10, type=int, help='the neighborhood size (only compatible with csls)')
     parser.add_argument('--nbest', default=3, type=int, help='number of candidates to get')
     parser.add_argument('--dot', action='store_true', help='use the dot product in the similarity computations instead of the cosine')
     parser.add_argument('--verbose', action='store_true', help='verbose, print more information')
@@ -121,22 +121,30 @@ def main():
         # print(f'{len(oov)} oovs: ' + '|'.join(list(oov)), file=sys.stderr)
 
     if args.retrieval == 'nn': # Standard nearest neighbor
-        for i in range(0, len(src), BATCH_SIZE):
-            j = min(i + BATCH_SIZE, len(src))
-            similarities = x[src[i:j]].dot(z.T)
-            nn = (-similarities).argpartition(args.nbest, axis=1)
-            for k in range(j - i):
-                wind = src[i + k]
-                w = src_ind2word[wind]
-                for tind in nn[k, :args.nbest]:
-                    wt = trg_ind2word[tind]
-                    st = similarities[k, tind]
-                    print(f'{w}\t{wt}\t{st:.3f}')
+        queries = x[src]
+        topvals, topinds = embeddings.faiss_knn(queries, z, k=args.nbest)
+        for i, wind in enumerate(src):
+            w = src_ind2word[wind]
+            for k, tind in enumerate(topinds[i]):
+                wt = trg_ind2word[tind]
+                st = topvals[i, k]
+                print(f'{w}\t{wt}\t{st:.3f}')
+    elif args.retrieval == 'fcsls':  # Cross-domain similarity local scaling
+        sim_bwd, _ = embeddings.faiss_knn(z, x, k=args.neighborhood)
+        knn_sim_bwd = sim_bwd.mean(axis=1)
+        queries = x[src]
+        topvals, topinds = embeddings.faiss_knn(queries, z, k=20)
+        for i, wind in enumerate(src):
+            w = src_ind2word[wind]
+            for k, tind in enumerate(topinds[i]):
+                wt = trg_ind2word[tind]
+                st = 2 * topvals[i, k] - knn_sim_bwd[topinds[i, k]]
+                print(f'{w}\t{wt}\t{st:.3f}')
     elif args.retrieval == 'csls':  # Cross-domain similarity local scaling
-        knn_sim_bwd = xp.zeros(z.shape[0])
-        for i in range(0, z.shape[0], BATCH_SIZE):
-            j = min(i + BATCH_SIZE, z.shape[0])
-            knn_sim_bwd[i:j] = topk_mean(z[i:j].dot(x.T), k=args.neighborhood, inplace=True)
+        sim_bwd, _ = embeddings.faiss_knn(z, x, k=args.neighborhood)
+        knn_sim_bwd = sim_bwd.mean(axis=1)
+        queries = x[src]
+
         for i in range(0, len(src), BATCH_SIZE):
             j = min(i + BATCH_SIZE, len(src))
             similarities = 2*x[src[i:j]].dot(z.T) - knn_sim_bwd  # Equivalent to the real CSLS scores for NN

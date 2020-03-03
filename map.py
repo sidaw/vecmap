@@ -22,7 +22,6 @@ import numpy as np
 import re
 import sys
 import time
-
 from scipy.special import softmax
 
 xp = np
@@ -33,7 +32,6 @@ def dropout(m, p):
         xp = get_array_module(m)
         mask = xp.random.rand(*m.shape) >= p
         return m*mask
-
 
 def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
     xp = get_array_module(m)
@@ -52,27 +50,24 @@ def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
         m[ind0, ind1] = minimum
     return ans / k
 
-def sample_matches(xw, zw, T, kbest=5):
-    # match = (sind, [tinds], weight?)
-    matches = []
-    # this is where faiss could be good
-    sims = xw.dot(zw.T)
-    topinds = (-sims).argpartition(kbest, axis=1)[:, :kbest]
+def find_matches(matches, xw, zw, T, kbest=5):
+    # match = (sind, tind, weight?)
+    topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
+    objective = 0
+    eta = 0.01
+    # topinds = (-sims).argpartition(kbest, axis=1)[:, :kbest]
     for i in range(xw.shape[0]):
-        if xp.random.rand() < 0.1:
-            j = -1
-        else:
-            j = sample(topinds[i], sims[i, topinds[i]], T)
-        matches.append((i, j))
-    return matches, sims
+        # topvals = sims[i, topinds[i]]
+        topvali = topvals[i]
+        objective += topvali[0]
+        topprobs = softmax(topvali / T)
+        j = xp.random.choice(range(kbest), p=topprobs)
+        hit = topinds[i, j]
+        if np.random.rand() < 1:
+            matches[(i, hit)] = max(1, matches[(i, hit)])
+        # matches[(i, hit)] = (1-eta) * matches[(i, hit)] + eta * topvali[j]
+    return matches, objective / xw.shape[0]
 
-def sample(topinds, topvs, T):
-    topprobs = softmax(topvs / T)
-    # print(topprobs)
-    j = xp.random.choice(topinds, p=topprobs)
-    return j
-
-@profile
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Map word embeddings in two languages into a shared space')
@@ -137,7 +132,6 @@ def main():
 
     if args.fast:
         parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=2000, csls_neighborhood=0)
-
     if args.supervised is not None:
         parser.set_defaults(init_dictionary=args.supervised, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', batch_size=1000)
     if args.semi_supervised is not None:
@@ -280,164 +274,63 @@ def main():
     # Allocate memory
     xw = xp.empty_like(x)
     zw = xp.empty_like(z)
-    src_size = x.shape[0] if args.vocabulary_cutoff <= 0 else min(x.shape[0], args.vocabulary_cutoff)
-    trg_size = z.shape[0] if args.vocabulary_cutoff <= 0 else min(z.shape[0], args.vocabulary_cutoff)
-    simfwd = xp.empty((args.batch_size, trg_size), dtype=dtype)
-    simbwd = xp.empty((args.batch_size, src_size), dtype=dtype)
-    
+    matches = collections.defaultdict(lambda: 0)
+    for p in zip(src_indices, trg_indices):
+        matches[p] = 10
+
     if args.validation is not None:
         simval = xp.empty((len(validation.keys()), z.shape[0]), dtype=dtype)
 
-    best_sim_forward = xp.full(src_size, -100, dtype=dtype)
-    src_indices_forward = xp.arange(src_size)
-    trg_indices_forward = xp.zeros(src_size, dtype=int)
-    best_sim_backward = xp.full(trg_size, -100, dtype=dtype)
-    src_indices_backward = xp.zeros(trg_size, dtype=int)
-    trg_indices_backward = xp.arange(trg_size)
-    knn_sim_fwd = xp.zeros(src_size, dtype=dtype)
-    knn_sim_bwd = xp.zeros(trg_size, dtype=dtype)
-
     # Training loop
-    best_objective = objective = -100.
     it = 1
-    last_improvement = 0
     keep_prob = args.stochastic_initial
     t = time.time()
-    end = not args.self_learning
     while True:
-        # Increase the keep probability if we have not improve in args.stochastic_interval iterations
-        keep_prob = min(1, (it + 1) / args.maxiter)
-
-        # Update the embedding mapping
-        if args.orthogonal or not end:  # orthogonal mapping
-            u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
+        indices, weights = [list(a) for a in zip(*matches.items())]
+        weights = xp.array(weights, dtype=dtype)[:, None]
+        src_indices, trg_indices = [list(a) for a in zip(*indices)]
+        
+        if args.orthogonal:
+            u, s, vt = xp.linalg.svd((weights * z[trg_indices]).T.dot(x[src_indices]))
             w = vt.T.dot(u.T)
             x.dot(w, out=xw)
-            zw[:] = z
-        elif args.unconstrained:  # unconstrained mapping
-            # x_pseudoinv = xp.linalg.inv(x[src_indices].T.dot(x[src_indices])).dot(x[src_indices].T)
-            # w = x_pseudoinv.dot(z[trg_indices])
-            w = np.linalg.lstsq(x[src_indices], z[trg_indices])[0]
+            zw = z[:]
+        # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
+        elif args.unconstrained:
+            # w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
+            w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
             x.dot(w, out=xw)
-            zw[:] = z
-        else:  # advanced mapping
 
-            # TODO xw.dot(wx2, out=xw) and alike not working
-            xw[:] = x
-            zw[:] = z
 
-            # STEP 1: Whitening
-            def whitening_transformation(m):
-                u, s, vt = xp.linalg.svd(m, full_matrices=False)
-                return vt.T.dot(xp.diag(1/s)).dot(vt)
-            if args.whiten:
-                wx1 = whitening_transformation(xw[src_indices])
-                wz1 = whitening_transformation(zw[trg_indices])
-                xw = xw.dot(wx1)
-                zw = zw.dot(wz1)
+        T = np.exp((it - 1) * np.log(1e-3) / (args.maxiter))
+        T = 1
+        matches, objective = find_matches(matches, xw, zw, T=T)
+    
+        # Accuracy and similarity evaluation in validation
+        if args.validation is not None:
+            src = list(validation.keys())
+            xw[src].dot(zw.T, out=simval)
+            nn = asnumpy(simval.argmax(axis=1))
+            accuracy = np.mean([1 if nn[i] in validation[src[i]] else 0 for i in range(len(src))])
+            similarity = np.mean([np.max([simval[i, j].tolist() for j in validation[src[i]]]) for i in range(len(src))])
 
-            # STEP 2: Orthogonal mapping
-            wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-            wz2 = wz2_t.T
-            xw = xw.dot(wx2)
-            zw = zw.dot(wz2)
-
-            # STEP 3: Re-weighting
-            xw *= s**args.src_reweight
-            zw *= s**args.trg_reweight
-
-            # STEP 4: De-whitening
-            if args.src_dewhiten == 'src':
-                xw = xw.dot(wx2.T.dot(xp.linalg.inv(wx1)).dot(wx2))
-            elif args.src_dewhiten == 'trg':
-                xw = xw.dot(wz2.T.dot(xp.linalg.inv(wz1)).dot(wz2))
-            if args.trg_dewhiten == 'src':
-                zw = zw.dot(wx2.T.dot(xp.linalg.inv(wx1)).dot(wx2))
-            elif args.trg_dewhiten == 'trg':
-                zw = zw.dot(wz2.T.dot(xp.linalg.inv(wz1)).dot(wz2))
-
-            # STEP 5: Dimensionality reduction
-            if args.dim_reduction > 0:
-                xw = xw[:, :args.dim_reduction]
-                zw = zw[:, :args.dim_reduction]
-
-        # Self-learning
-        if end:
-            break
-        else:
-            # Update the training dictionary
-            if args.direction in ('forward', 'union'):
-                for i in range(0, src_size, simfwd.shape[0]):
-                    j = min(i + simfwd.shape[0], src_size)
-                    T = np.exp((it - 1) * np.log(1e-3) / (args.maxiter))
-                    matchesi, sims = sample_matches(xw[i:j], zw[:trg_size], T=T)
-                    trg_indices_forward[i:j] = xp.array(list(zip(*matchesi))[1])
-                    sims.max(axis=1, out=best_sim_forward[i:j])
-                
-            if args.direction in ('backward', 'union'):
-                if args.csls_neighborhood > 0:
-                    for i in range(0, src_size, simfwd.shape[0]):
-                        j = min(i + simfwd.shape[0], src_size)
-                        xw[i:j].dot(zw[:trg_size].T, out=simfwd[:j-i])
-                        knn_sim_fwd[i:j] = topk_mean(simfwd[:j-i], k=args.csls_neighborhood, inplace=True)
-                for i in range(0, trg_size, simbwd.shape[0]):
-                    j = min(i + simbwd.shape[0], trg_size)
-                    zw[i:j].dot(xw[:src_size].T, out=simbwd[:j-i])
-                    simbwd[:j-i].max(axis=1, out=best_sim_backward[i:j])
-                    simbwd[:j-i] -= knn_sim_fwd/2  # Equivalent to the real CSLS scores for NN
-                    dropout(simbwd[:j-i], 1 - keep_prob).argmax(axis=1, out=src_indices_backward[i:j])
-            if args.direction == 'forward':
-                src_indices = src_indices_forward
-                trg_indices = trg_indices_forward
-            elif args.direction == 'backward':
-                src_indices = src_indices_backward
-                trg_indices = trg_indices_backward
-            elif args.direction == 'union':
-                src_indices = xp.concatenate((src_indices_forward, src_indices_backward))
-                trg_indices = xp.concatenate((trg_indices_forward, trg_indices_backward))
-
-            matches = zip(src_indices, trg_indices)
-            filtered = zip(*filter(lambda x: x[0] >= 0 and x[1] >= 0, matches))
-            filtered = list(filtered)
-            src_indices, trg_indices = xp.array(filtered[0]), xp.array(filtered[1])
-            print(src_indices.shape)
-
-            # Objective function evaluation
-            if args.direction == 'forward':
-                objective = xp.mean(best_sim_forward).tolist()
-            elif args.direction == 'backward':
-                objective = xp.mean(best_sim_backward).tolist()
-            elif args.direction == 'union':
-                objective = (xp.mean(best_sim_forward) + xp.mean(best_sim_backward)).tolist() / 2
-            if objective - best_objective >= args.threshold:
-                last_improvement = it
-                best_objective = objective
-
-            # Accuracy and similarity evaluation in validation
+        # Logging
+        duration = time.time() - t
+        if args.verbose:
+            print(file=sys.stderr)
+            print('ITERATION {0} ({1:.2f}s)'.format(it, duration), file=sys.stderr)
+            print('\t- Objective:        {0:9.4f}%'.format(100 * objective), file=sys.stderr)
+            print(f'\t- Temp:             {T:.3f}', file=sys.stderr)
             if args.validation is not None:
-                src = list(validation.keys())
-                xw[src].dot(zw.T, out=simval)
-                nn = asnumpy(simval.argmax(axis=1))
-                accuracy = np.mean([1 if nn[i] in validation[src[i]] else 0 for i in range(len(src))])
-                similarity = np.mean([max([simval[i, j].tolist() for j in validation[src[i]]]) for i in range(len(src))])
-
-            # Logging
-            duration = time.time() - t
-            if args.verbose:
-                print(file=sys.stderr)
-                print('ITERATION {0} ({1:.2f}s)'.format(it, duration), file=sys.stderr)
-                print('\t- Objective:        {0:9.4f}%'.format(100 * objective), file=sys.stderr)
-                print('\t- Drop probability: {0:9.4f}%'.format(100 - 100*keep_prob), file=sys.stderr)
-                if args.validation is not None:
-                    print('\t- Val. similarity:  {0:9.4f}%'.format(100 * similarity), file=sys.stderr)
-                    print('\t- Val. accuracy:    {0:9.4f}%'.format(100 * accuracy), file=sys.stderr)
-                    print('\t- Val. coverage:    {0:9.4f}%'.format(100 * validation_coverage), file=sys.stderr)
-                sys.stderr.flush()
-            if args.log is not None:
-                val = '{0:.6f}\t{1:.6f}\t{2:.6f}'.format(
-                    100 * similarity, 100 * accuracy, 100 * validation_coverage) if args.validation is not None else ''
-                print('{0}\t{1:.6f}\t{2}\t{3:.6f}'.format(it, 100 * objective, val, duration), file=log)
-                log.flush()
+                print('\t- Val. similarity:  {0:9.4f}%'.format(100 * similarity), file=sys.stderr)
+                print('\t- Val. accuracy:    {0:9.4f}%'.format(100 * accuracy), file=sys.stderr)
+                print('\t- Val. coverage:    {0:9.4f}%'.format(100 * validation_coverage), file=sys.stderr)
+            sys.stderr.flush()
+        if args.log is not None:
+            val = '{0:.6f}\t{1:.6f}\t{2:.6f}'.format(
+                100 * similarity, 100 * accuracy, 100 * validation_coverage) if args.validation is not None else ''
+            print('{0}\t{1:.6f}\t{2}\t{3:.6f}'.format(it, 100 * objective, val, duration), file=log)
+            log.flush()
 
         t = time.time()
         it += 1

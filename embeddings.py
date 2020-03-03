@@ -16,7 +16,7 @@
 from cupy_utils import *
 
 import numpy as np
-
+import faiss
 
 def read(file, threshold=0, vocabulary=None, dtype='float'):
     header = file.readline().split(' ')
@@ -78,3 +78,14 @@ def normalize(matrix, actions):
             length_normalize_dimensionwise(matrix)
         elif action == 'centeremb':
             mean_center_embeddingwise(matrix)
+
+
+def faiss_knn(Q, X, k, dist='IP'):
+    d = X.shape[1]
+    if dist == 'IP':
+        index = faiss.IndexFlatIP(d)
+    elif dist == 'L2':
+        index = faiss.IndexFlatL2(d)
+    index.add(X)
+    dists, inds = index.search(Q, k)
+    return dists, inds
