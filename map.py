@@ -65,14 +65,17 @@ def _find_matches(xw, zw, T, kbest=30):
     topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
     objective = 0
     # topinds = (-sims).argpartition(kbest, axis=1)[:, :kbest]
-    matches = {} 
+    matches = {}
     for i in range(xw.shape[0]):
         # topvals = sims[i, topinds[i]]
         topvali = topvals[i]
         objective += topvali[0]
+        if topvali[0] < objective / (i+1):
+            continue
         topprobs = softmax(topvali / T)
         j = xp.random.choice(range(kbest), p=topprobs)
-        hit = topinds[i, j]
+        # hit = topinds[i, j]
+        hit = topinds[i, 0]
         if (i, hit) not in matches:
             matches[(i, hit)] = 1
         matches[(i, hit)] = matches[(i, hit)] * 1.1
@@ -82,15 +85,12 @@ def _find_matches(xw, zw, T, kbest=30):
 def find_matches(matches, xw, zw, T, kbest=30):
     matches_fwd, obj_fwd = _find_matches(xw, zw, T, kbest=30)
     matches_rev, obj_rev = _find_matches(zw, xw, T, kbest=30)
+    matches = {}
     for m in matches_fwd:
-        if m not in matches:
-            matches[m] = 1
-        matches[m] *= 1.1
+        matches[m] = 1
     for r in matches_rev:
         m = (r[1], r[0])
-        if m not in matches:
-            matches[m] = 1
-        matches[m] *= 1.1
+        matches[m] = 1
     return matches, (obj_fwd + obj_rev) / 2
 
 
@@ -190,10 +190,10 @@ def main():
         dtype = 'float64'
 
     # Read input embeddings
-    srcfile = open(args.src_input, encoding=args.encoding, errors='surrogateescape')
-    trgfile = open(args.trg_input, encoding=args.encoding, errors='surrogateescape')
-    src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.vocabulary_cutoff)
-    trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.vocabulary_cutoff)
+    with open(args.src_input, encoding=args.encoding, errors='surrogateescape') as srcfile, \
+            open(args.trg_input, encoding=args.encoding, errors='surrogateescape') as trgfile:
+        src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.vocabulary_cutoff)
+        trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.vocabulary_cutoff)
 
     # NumPy/CuPy management
     if args.cuda:
@@ -300,13 +300,13 @@ def main():
     # Allocate memory
     xw = xp.empty_like(x)
     zw = xp.empty_like(z)
-    matches = {} 
+    matches = {}
     for p in zip(src_indices, trg_indices):
-        matches[p] = 5
-    identical = set(src_words).intersection(set(trg_words))
-    for word in identical:
-        p = (src_word2ind[word], trg_word2ind[word])
         matches[p] = 1
+    # identical = set(src_words).intersection(set(trg_words))
+    # for word in identical:
+    #     p = (src_word2ind[word], trg_word2ind[word])
+    #     matches[p] = 1
 
     if args.validation is not None:
         simval = xp.empty((len(validation.keys()), z.shape[0]), dtype=dtype)
@@ -322,8 +322,8 @@ def main():
             src_indices, trg_indices = [list(a) for a in zip(*indices)]
             return src_indices, trg_indices, weights
 
-        samp_m = sample_matches(matches, p=0.5)
-        src_indices, trg_indices, weights = flatten_match(samp_m)
+        # samp_m = sample_matches(matches, p=1)
+        src_indices, trg_indices, weights = flatten_match(matches)
         if args.unconstrained:
             # w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
             w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
@@ -334,7 +334,7 @@ def main():
             x.dot(w, out=xw)
             zw = z[:]
 
-        T = 10 * np.exp((it - 1) * np.log(1e-3/10) / (args.maxiter))
+        T = 100 * np.exp((it - 1) * np.log(1e-3/10) / (args.maxiter))
         # T = 1
         matches, objective = find_matches(matches, xw, zw, T=T)
         
@@ -353,6 +353,7 @@ def main():
             print('ITERATION {0} ({1:.2f}s)'.format(it, duration), file=sys.stderr)
             print('\t- Objective:        {0:9.4f}%'.format(100 * objective), file=sys.stderr)
             print(f'\t- Temp:             {T:.3f}', file=sys.stderr)
+            print(f'\t- #Anchors:             {len(matches)}', file=sys.stderr)
             if args.validation is not None:
                 print('\t- Val. similarity:  {0:9.4f}%'.format(100 * similarity), file=sys.stderr)
                 print('\t- Val. accuracy:    {0:9.4f}%'.format(100 * accuracy), file=sys.stderr)
@@ -369,13 +370,20 @@ def main():
         if it >= args.maxiter:
             break
 
-    # Write mapped embeddings
-    srcfile = open(args.src_output, mode='w', encoding=args.encoding, errors='surrogateescape')
-    trgfile = open(args.trg_output, mode='w', encoding=args.encoding, errors='surrogateescape')
-    embeddings.write(src_words, xw, srcfile)
-    embeddings.write(trg_words, zw, trgfile)
-    srcfile.close()
-    trgfile.close()
+    # write mapped embeddings
+    print('**** reading and writing final embeddings ****', file=sys.stderr)
+    with open(args.src_input, encoding=args.encoding, errors='surrogateescape') as srcfile, \
+            open(args.trg_input, encoding=args.encoding, errors='surrogateescape') as trgfile:
+        src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=200000)
+        trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=200000)
+
+    embeddings.normalize(x, args.normalize)
+    embeddings.normalize(z, args.normalize)
+
+    with open(args.src_output, mode='w', encoding=args.encoding, errors='surrogateescape') as srcfile, \
+            open(args.trg_output, mode='w', encoding=args.encoding, errors='surrogateescape') as trgfile:
+        embeddings.write(src_words, x.dot(w), srcfile)
+        embeddings.write(trg_words, z, trgfile)
 
 if __name__ == '__main__':
     main()

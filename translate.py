@@ -106,7 +106,9 @@ def main():
     src = [] 
     for line in f:
         if '\t' in line:
-            w, _ = line.split()
+            w, _ = line.split('\t')
+        elif ' ' in line:
+            w, _ = line.split(' ')
         else:
             w = line.strip()
         if w in vocab:
@@ -117,8 +119,8 @@ def main():
         except KeyError:
             oov.add(w)
     
-    # if args.verbose:
-        # print(f'{len(oov)} oovs: ' + '|'.join(list(oov)), file=sys.stderr)
+    if args.verbose:
+        print(f'{len(oov)} oovs: ' + '|'.join(list(oov)[:10]), file=sys.stderr)
 
     if args.retrieval == 'nn': # Standard nearest neighbor
         queries = x[src]

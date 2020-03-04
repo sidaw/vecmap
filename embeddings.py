@@ -98,4 +98,4 @@ def faiss_csls(Q, X, k, dist='IP'):
     topvals, topinds = faiss_knn(Q, X, k=k)
     for i in range(topvals.shape[0]):
         topvals[i] = 2 * topvals[i] - knn_sim_bwd[topinds[i]]
-    return topvals, topinds 
+    return topvals, topinds

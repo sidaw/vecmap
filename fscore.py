@@ -66,15 +66,18 @@ def main():
     statsr = precision(ref, trans, tag='FN')
     oov = np.sum([1 if f[1] == 'missing' else 0 for f in statsr])
 
-    allstats = {}
-    for s in statsp + statsr:
-        if s[0] in allstats:
-            assert allstats[s[0]] == 'TP'
-        allstats[s[0]] = s[1]
+    allstats = collections.defaultdict(dict)
+    for l in statsp + statsr:
+        st, status = l
+        s, t = st
+        if t in allstats[s]:
+            assert allstats[s][t] == 'TP'
+        allstats[s][t] = status
 
-    for st in allstats:
-        stscore = scores[st[0]][st[1]]
-        print(f'{st[0]}\t{st[1]}\t{allstats[st]}\t{stscore}')
+    for s in allstats:
+        for t in allstats[s]:
+            stscore = scores[s][t]
+            print(f'{s}\t{t}\t{allstats[s][t]}\t{stscore}')
 
     prec = np.mean([1 if f[1] == 'TP' else 0 for f in statsp])
     recall = np.mean([1 if f[1] == 'TP' else 0 for f in statsr])
