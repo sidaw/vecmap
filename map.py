@@ -60,9 +60,12 @@ def sample_matches(matches, p=0.3):
             sampled[k] = matches[k]
     return sampled
 
-def _find_matches(xw, zw, T, kbest=30):
+def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
     # match = (sind, tind, weight?)
-    topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
+    # numcands = kbest
+    # topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
+    numcands = 30
+    topvals, topinds = embeddings.faiss_csls(xw, zw, k=numcands, dist='IP')
     objective = 0
     # topinds = (-sims).argpartition(kbest, axis=1)[:, :kbest]
     matches = {}
@@ -70,27 +73,31 @@ def _find_matches(xw, zw, T, kbest=30):
         # topvals = sims[i, topinds[i]]
         topvali = topvals[i]
         objective += topvali[0]
-        if topvali[0] < objective / (i+1):
-            continue
-        topprobs = softmax(topvali / T)
-        j = xp.random.choice(range(kbest), p=topprobs)
+        topprobs = softmax(topvali / 0.02)
+        j = xp.random.choice(range(numcands), p=topprobs)
         # hit = topinds[i, j]
-        hit = topinds[i, 0]
+        # mind = topvali.argmax()
+        if topvali[j] < 0.45:
+            continue
+        hit = topinds[i, j]
         if (i, hit) not in matches:
             matches[(i, hit)] = 1
-        matches[(i, hit)] = matches[(i, hit)] * 1.1
         # matches[(i, hit)] = (1-eta) * matches[(i, hit)] + eta * topvali[j]
     return matches, objective / xw.shape[0]
 
+
 def find_matches(matches, xw, zw, T, kbest=30):
-    matches_fwd, obj_fwd = _find_matches(xw, zw, T, kbest=30)
-    matches_rev, obj_rev = _find_matches(zw, xw, T, kbest=30)
+    matches_fwd, obj_fwd = _find_matches(xw, zw, T, kbest=10)
+    matches_rev, obj_rev = _find_matches(zw, xw, T, kbest=10)
     matches = {}
     for m in matches_fwd:
         matches[m] = 1
     for r in matches_rev:
         m = (r[1], r[0])
-        matches[m] = 1
+        if m in matches:
+            matches[m] = 10
+        else:
+            matches[m] = 1
     return matches, (obj_fwd + obj_rev) / 2
 
 
@@ -257,6 +264,7 @@ def main():
         for word in identical:
             src_indices.append(src_word2ind[word])
             trg_indices.append(trg_word2ind[word])
+        print(f'count identical {len(identical)}')
     else:
         f = open(args.init_dictionary, encoding=args.encoding, errors='surrogateescape')
         for line in f:
@@ -325,8 +333,10 @@ def main():
         # samp_m = sample_matches(matches, p=1)
         src_indices, trg_indices, weights = flatten_match(matches)
         if args.unconstrained:
-            # w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
-            w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
+            w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
+            # w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
+            x.dot(w, out=xw)
+            zw = z[:]
         else:
             u, s, vt = xp.linalg.svd((weights * z[trg_indices]).T.dot(x[src_indices]))
             # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
@@ -334,7 +344,7 @@ def main():
             x.dot(w, out=xw)
             zw = z[:]
 
-        T = 100 * np.exp((it - 1) * np.log(1e-3/10) / (args.maxiter))
+        T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
         matches, objective = find_matches(matches, xw, zw, T=T)
         
