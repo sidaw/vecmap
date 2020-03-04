@@ -63,41 +63,43 @@ def sample_matches(matches, p=0.3):
 def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
     # match = (sind, tind, weight?)
     # numcands = kbest
-    # topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
+    topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
     numcands = 30
-    topvals, topinds = embeddings.faiss_csls(xw, zw, k=numcands, dist='IP')
-    objective = 0
-    # topinds = (-sims).argpartition(kbest, axis=1)[:, :kbest]
+    # topvals, topinds = embeddings.faiss_csls(xw, zw, k=numcands, dist='IP')
+    objective = np.mean(topvals[:, 0])
+    mean = np.mean(topvals[:, 0])
+    std = np.std(topvals[:, 0])
     matches = {}
+    print(f'mean\t{mean:.2%}')
+    print(f'std\t{std:.2%}')
     for i in range(xw.shape[0]):
-        # topvals = sims[i, topinds[i]]
         topvali = topvals[i]
-        objective += topvali[0]
-        topprobs = softmax(topvali / 0.02)
-        j = xp.random.choice(range(numcands), p=topprobs)
-        # hit = topinds[i, j]
-        # mind = topvali.argmax()
-        if topvali[j] < 0.45:
+        j = topvali.argmax()
+        valmax = topvali[j]
+        if valmax < mean:
             continue
+        # topprobs = softmax(topvali / 0.02)
+        # j = xp.random.choice(range(numcands), p=topprobs)
+        # hit = topinds[i, j]
         hit = topinds[i, j]
         if (i, hit) not in matches:
-            matches[(i, hit)] = 1
+            matches[(i, hit)] = valmax
         # matches[(i, hit)] = (1-eta) * matches[(i, hit)] + eta * topvali[j]
-    return matches, objective / xw.shape[0]
+    return matches, objective
 
 
 def find_matches(matches, xw, zw, T, kbest=30):
     matches_fwd, obj_fwd = _find_matches(xw, zw, T, kbest=10)
     matches_rev, obj_rev = _find_matches(zw, xw, T, kbest=10)
     matches = {}
-    for m in matches_fwd:
-        matches[m] = 1
+    # for m in matches_fwd:
+    #     matches[m] = matches_fwd[m]
     for r in matches_rev:
         m = (r[1], r[0])
-        if m in matches:
-            matches[m] = 10
-        else:
-            matches[m] = 1
+        if m in matches_fwd:
+            matches[m] = 0.5 * (matches_rev[r] + matches_fwd[m])
+        # else:
+        #     matches[m] = 1
     return matches, (obj_fwd + obj_rev) / 2
 
 
@@ -225,33 +227,7 @@ def main():
     # Build the seed dictionary
     src_indices = []
     trg_indices = []
-    if args.init_unsupervised:
-        sim_size = min(x.shape[0], z.shape[0]) if args.unsupervised_vocab <= 0 else min(x.shape[0], z.shape[0], args.unsupervised_vocab)
-        u, s, vt = xp.linalg.svd(x[:sim_size], full_matrices=False)
-        xsim = (u*s).dot(u.T)
-        u, s, vt = xp.linalg.svd(z[:sim_size], full_matrices=False)
-        zsim = (u*s).dot(u.T)
-        del u, s, vt
-        xsim.sort(axis=1)
-        zsim.sort(axis=1)
-        embeddings.normalize(xsim, args.normalize)
-        embeddings.normalize(zsim, args.normalize)
-        sim = xsim.dot(zsim.T)
-        if args.csls_neighborhood > 0:
-            knn_sim_fwd = topk_mean(sim, k=args.csls_neighborhood)
-            knn_sim_bwd = topk_mean(sim.T, k=args.csls_neighborhood)
-            sim -= knn_sim_fwd[:, xp.newaxis]/2 + knn_sim_bwd/2
-        if args.direction == 'forward':
-            src_indices = xp.arange(sim_size)
-            trg_indices = sim.argmax(axis=1)
-        elif args.direction == 'backward':
-            src_indices = sim.argmax(axis=0)
-            trg_indices = xp.arange(sim_size)
-        elif args.direction == 'union':
-            src_indices = xp.concatenate((xp.arange(sim_size), sim.argmax(axis=0)))
-            trg_indices = xp.concatenate((sim.argmax(axis=1), xp.arange(sim_size)))
-        del xsim, zsim, sim
-    elif args.init_numerals:
+    if args.init_numerals:
         numeral_regex = re.compile('^[0-9]+$')
         src_numerals = {word for word in src_words if numeral_regex.match(word) is not None}
         trg_numerals = {word for word in trg_words if numeral_regex.match(word) is not None}
@@ -311,10 +287,10 @@ def main():
     matches = {}
     for p in zip(src_indices, trg_indices):
         matches[p] = 1
-    # identical = set(src_words).intersection(set(trg_words))
-    # for word in identical:
-    #     p = (src_word2ind[word], trg_word2ind[word])
-    #     matches[p] = 1
+    identical = set(src_words).intersection(set(trg_words))
+    for word in identical:
+        p = (src_word2ind[word], trg_word2ind[word])
+        matches[p] = 1
 
     if args.validation is not None:
         simval = xp.empty((len(validation.keys()), z.shape[0]), dtype=dtype)
@@ -323,6 +299,7 @@ def main():
     it = 1
     keep_prob = args.stochastic_initial
     t = time.time()
+    wprev = 0
     while True:
         def flatten_match(matches):
             indices, weights = [list(a) for a in zip(*matches.items())]
@@ -364,6 +341,7 @@ def main():
             print('\t- Objective:        {0:9.4f}%'.format(100 * objective), file=sys.stderr)
             print(f'\t- Temp:             {T:.3f}', file=sys.stderr)
             print(f'\t- #Anchors:             {len(matches)}', file=sys.stderr)
+            print(f'\t- DeltaW:             {np.linalg.norm(w - wprev):.3f}', file=sys.stderr)
             if args.validation is not None:
                 print('\t- Val. similarity:  {0:9.4f}%'.format(100 * similarity), file=sys.stderr)
                 print('\t- Val. accuracy:    {0:9.4f}%'.format(100 * accuracy), file=sys.stderr)
@@ -375,17 +353,24 @@ def main():
             print('{0}\t{1:.6f}\t{2}\t{3:.6f}'.format(it, 100 * objective, val, duration), file=log)
             log.flush()
 
-        t = time.time()
-        it += 1
         if it >= args.maxiter:
+            with open('matches.tmp', mode='w') as f:
+                for p in matches:
+                    si = p[0]
+                    ti = p[1]
+                    print(f'{src_words[si]}\t{trg_words[ti]}\t{matches[p]:.3f}', file=f)
             break
+
+        t = time.time()
+        wprev = w
+        it += 1
 
     # write mapped embeddings
     print('**** reading and writing final embeddings ****', file=sys.stderr)
     with open(args.src_input, encoding=args.encoding, errors='surrogateescape') as srcfile, \
             open(args.trg_input, encoding=args.encoding, errors='surrogateescape') as trgfile:
-        src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=200000)
-        trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=200000)
+        src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=100000)
+        trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=100000)
 
     embeddings.normalize(x, args.normalize)
     embeddings.normalize(z, args.normalize)
