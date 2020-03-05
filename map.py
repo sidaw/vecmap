@@ -35,12 +35,11 @@ def sample_matches(matches, p=0.3):
             sampled[k] = matches[k]
     return sampled
 
-def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
-    # match = (sind, tind, weight?)
-    # numcands = kbest
-    topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
-    # numcands = 30
-    # topvals, topinds = embeddings.faiss_csls(xw, zw, k=numcands, dist='IP')
+def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
+    if csls > 0:
+        topvals, topinds = embeddings.faiss_csls(xw, zw, k=kbest, csls=csls, dist='IP')
+    else:
+        topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
     objective = np.mean(topvals[:, 0])
     mean = np.mean(topvals[:, 0])
     std = np.std(topvals[:, 0])
@@ -51,8 +50,8 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
         topvali = topvals[i]
         j = 0
         valmax = topvali[j]
-        if valmax < mean - 0.5 * std:
-            continue
+        # if valmax < mean - 0.5 * std:
+        #     continue
         # topprobs = softmax(topvali / 0.02)
         # j = xp.random.choice(range(numcands), p=topprobs)
         # hit = topinds[i, j]
@@ -63,24 +62,27 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
     return matches, objective
 
 
-def find_matches(matches, xw, zw, excluded, T, kbest=30):
-    matches_fwd, obj_fwd = _find_matches(xw, zw, T, kbest=10)
-    matches_rev, obj_rev = _find_matches(zw, xw, T, kbest=10)
+def find_matches(matches, xw, zw, excluded, T, csls=0, kbest=30):
+    matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=10)
+    matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=10)
     matches = {}
-    # for m in matches_fwd:
-    #     matches[m] = matches_fwd[m]
+    for m in matches_fwd:
+        if m in excluded:
+            continue
+        matches[m] = matches_fwd[m]
     for r in matches_rev:
         m = (r[1], r[0])
+        if m in excluded:
+            continue
         if m in matches_fwd:
-            if m in excluded:
-                continue
-            matches[m] = 0.5 * (matches_rev[r] + matches_fwd[m])
-        # else:
-        #     matches[m] = 1
+            matches[m] = 2 + matches_rev[r] + matches_fwd[m]
+        else:
+            matches[m] = matches_rev[r]
     return matches, (obj_fwd + obj_rev) / 2
 
-
+args = None
 def main():
+    global args
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Map word embeddings in two languages into a shared space')
     parser.add_argument('src_input', help='the input source embeddings')
@@ -306,12 +308,13 @@ def main():
             matchesp = collections.Counter(matches)
             tops = int(0.25 * len(matchesp))
             for k, v in matchesp.most_common()[:tops]:
+                if v < 2: continue
                 s, t = k
                 decided[(s, t)] += v
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
-        matches, objective = find_matches(matches, xw, zw, decided, T=T)
+        matches, objective = find_matches(matches, xw, zw, decided, T=T, csls=args.csls_neighborhood)
         
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:

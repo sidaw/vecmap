@@ -15,6 +15,7 @@
 
 from cupy_utils import *
 
+import sys
 import numpy as np
 import faiss
 
@@ -26,6 +27,8 @@ def read(file, threshold=0, vocabulary=None, dtype='float'):
     matrix = np.empty((count, dim), dtype=dtype) if vocabulary is None else []
     for i in range(count):
         word, vec = file.readline().split(' ', 1)
+        if word.strip() == '':
+            print('only space chars in word', file=sys.stderr)
         if vocabulary is None:
             words.append(word)
             matrix[i] = np.fromstring(vec, sep=' ', dtype=dtype)
@@ -91,9 +94,9 @@ def faiss_knn(Q, X, k, dist='IP'):
     return dists, inds
 
 
-def faiss_csls(Q, X, k, dist='IP', cslsk=10):
+def faiss_csls(Q, X, k, dist='IP', csls=10):
     # this k is neighborhood
-    sim_bwd, _ = faiss_knn(X, Q, k=cslsk)
+    sim_bwd, _ = faiss_knn(X, Q, k=csls)
     knn_sim_bwd = sim_bwd.mean(axis=1)
     topvals, topinds = faiss_knn(Q, X, k=k)
     for i in range(topvals.shape[0]):

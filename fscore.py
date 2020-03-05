@@ -18,7 +18,7 @@ def readdict(f):
 def readpreds(f, k=3, thres=0.3):
     d = collections.defaultdict(lambda: collections.Counter())
     for line in f:
-        s, t, score = line.split()[:3]
+        s, t, score = line.split('\t')[:3]
         score = float(score)
         if score < thres:
             continue
@@ -90,6 +90,16 @@ def main():
     printe(f'num oov {oov} / {len(ref)}')
     printe(f'len(ref):\t{len(ref)}')
     printe(f'len(trans):\t{len(trans)}')
+    inter = trans.keys() & ref.keys()
+    printe(f'covered:\t{len(inter)}')
+    numpreds = 0
+    for k in inter:
+        numpreds += len(trans[k])
+    printe(f'numpreds:\t{numpreds}')
+    total_preds = 0
+    for k in trans:
+        total_preds += len(trans[k])
+    printe(f'total_preds:\t{total_preds}')
 
 if __name__ == '__main__':
     main()
