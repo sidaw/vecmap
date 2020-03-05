@@ -61,19 +61,31 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
     return matches, objective
 
 
-def find_matches(matches, xw, zw, excluded, T, csls=0, kbest=30):
+def find_matches(xw, zw, cum_weights, T, csls=0, kbest=30, decay=1.01):
     matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=10)
     matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=10)
-    for m in matches_fwd:
-        if m in excluded:
-            continue
-        matches[m] += matches_fwd[m]
+    matches = collections.Counter()
+
+    # for m in matches_fwd:
+    #     if m in excluded:
+    #         continue
+        # matches[m] += matches_fwd[m]
     for r in matches_rev:
         m = (r[1], r[0])
-        matches[m] += matches_rev[r]
+        # matches[m] += matches_rev[r]
         if m in matches_fwd:
-            matches[m] += 100
+            if m not in cum_weights:
+                cum_weights[m] = 1
+            else:
+                cum_weights[m] = cum_weights[m] / decay
+            matches[m] = cum_weights[m]
     return matches, (obj_fwd + obj_rev) / 2
+
+def flatten_match(matches, dtype='float32'):
+    indices, weights = [list(a) for a in zip(*matches.items())]
+    weights = xp.array(weights, dtype=dtype)[:, None]
+    src_indices, trg_indices = [list(a) for a in zip(*indices)]
+    return src_indices, trg_indices, weights
 
 def main():
     # Parse command line arguments
@@ -88,6 +100,8 @@ def main():
     parser.add_argument('--batch_size', default=10000, type=int, help='batch size (defaults to 10000); does not affect results, larger is usually faster but uses more memory')
     parser.add_argument('--seed', type=int, default=0, help='the random seed (defaults to 0)')
     parser.add_argument('--maxiter', type=int, default=10, help='max number of iterations')
+    parser.add_argument('--decayrate', type=float, default=1.01, help='for boosting')
+    parser.add_argument('--dictname', default='dict.tmp', help='output the dictionary')
 
     recommended_group = parser.add_argument_group('recommended settings', 'Recommended settings for different scenarios')
     recommended_type = recommended_group.add_mutually_exclusive_group()
@@ -234,22 +248,16 @@ def main():
     t = time.time()
     wprev = 0
     decided = collections.Counter()
+    cum_weights = collections.Counter()
     while True:
-        def flatten_match(matches):
-            indices, weights = [list(a) for a in zip(*matches.items())]
-            weights = xp.array(weights, dtype=dtype)[:, None]
-            src_indices, trg_indices = [list(a) for a in zip(*indices)]
-            return src_indices, trg_indices, weights
-
-        # samp_m = sample_matches(matches, p=1)
         src_indices, trg_indices, weights = flatten_match(matches)
         if args.unconstrained:
-            # w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
-            w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
+            w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
+            # w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
             x.dot(w, out=xw)
             zw = z[:]
         else:
-            u, s, vt = xp.linalg.svd((1/weights * z[trg_indices]).T.dot(x[src_indices]))
+            u, s, vt = xp.linalg.svd((weights * z[trg_indices]).T.dot(x[src_indices]))
             # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
             w = vt.T.dot(u.T)
             x.dot(w, out=xw)
@@ -257,8 +265,12 @@ def main():
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
-        matches, objective = find_matches(matches, xw, zw, decided, T=T, csls=args.csls_neighborhood)
-        
+        matches, objective = find_matches(xw, zw, cum_weights, T=T, csls=args.csls_neighborhood, decay=args.decayrate)
+        matches = sample_matches(matches, p=0.95)
+
+
+        for m in matches:
+            decided[m] += 1
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())
@@ -294,12 +306,10 @@ def main():
         wprev = w
         it += 1
 
-    with open('dict.tmp', mode='w') as f:
-        decided = matches
-        for p in decided:
-            si = p[0]
-            ti = p[1]
-            print(f'{src_words[si]}\t{trg_words[ti]}\t{decided[p]:.3f}', file=f)
+    with open(args.dictname, mode='w') as f:
+        for p in decided.most_common():
+            si, ti = p[0]
+            print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]:.3f}', file=f)
 
     # write mapped embeddings
     print('**** reading and writing final embeddings ****', file=sys.stderr)
