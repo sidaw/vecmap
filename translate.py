@@ -24,7 +24,6 @@ import sys
 
 BATCH_SIZE = 500
 
-
 def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
     xp = get_array_module(m)
     n = m.shape[0]
@@ -59,7 +58,7 @@ def main():
     parser.add_argument('--encoding', default='utf-8', help='the character encoding for input/output (defaults to utf-8)')
     parser.add_argument('--seed', type=int, default=0, help='the random seed')
     parser.add_argument('--precision', choices=['fp16', 'fp32', 'fp64'], default='fp32', help='the floating-point precision (defaults to fp32)')
-    parser.add_argument('--threshold', default=0, type=int, help='vocab limit for reading the embedding')
+    parser.add_argument('--vocabulary_cutoff', default=0, type=int, help='vocab limit for reading the embedding')
     parser.add_argument('--cuda', action='store_true', help='use cuda (requires cupy)')
     args = parser.parse_args()
 
@@ -74,8 +73,8 @@ def main():
     # Read input embeddings
     srcfile = open(args.src_embeddings, encoding=args.encoding, errors='surrogateescape')
     trgfile = open(args.trg_embeddings, encoding=args.encoding, errors='surrogateescape')
-    src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.threshold)
-    trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.threshold)
+    src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.vocabulary_cutoff)
+    trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.vocabulary_cutoff)
 
     # NumPy/CuPy management
     if args.cuda:

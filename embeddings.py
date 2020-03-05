@@ -28,7 +28,8 @@ def read(file, threshold=0, vocabulary=None, dtype='float'):
     for i in range(count):
         word, vec = file.readline().split(' ', 1)
         if word.strip() == '':
-            print('only space chars in word', file=sys.stderr)
+            word = str(word.encode("utf-8"))
+            print(f'Warning: only space chars in word ({word})', file=sys.stderr)
         if vocabulary is None:
             words.append(word)
             matrix[i] = np.fromstring(vec, sep=' ', dtype=dtype)

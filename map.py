@@ -48,16 +48,15 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
     print(f'std\t{std:.2%}')
     for i in range(xw.shape[0]):
         topvali = topvals[i]
-        j = 0
-        valmax = topvali[j]
         # if valmax < mean - 0.5 * std:
         #     continue
         # topprobs = softmax(topvali / 0.02)
         # j = xp.random.choice(range(numcands), p=topprobs)
         # hit = topinds[i, j]
-        hit = topinds[i, j]
-        if (i, hit) not in matches:
-            matches[(i, hit)] = valmax
+        for j in range(1):
+            hit = topinds[i, j]
+            if (i, hit) not in matches:
+                matches[(i, hit)] = topvali[j]
         # matches[(i, hit)] = (1-eta) * matches[(i, hit)] + eta * topvali[j]
     return matches, objective
 
@@ -65,24 +64,18 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
 def find_matches(matches, xw, zw, excluded, T, csls=0, kbest=30):
     matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=10)
     matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=10)
-    matches = {}
     for m in matches_fwd:
         if m in excluded:
             continue
-        matches[m] = matches_fwd[m]
+        matches[m] += matches_fwd[m]
     for r in matches_rev:
         m = (r[1], r[0])
-        if m in excluded:
-            continue
+        matches[m] += matches_rev[r]
         if m in matches_fwd:
-            matches[m] = 2 + matches_rev[r] + matches_fwd[m]
-        else:
-            matches[m] = matches_rev[r]
+            matches[m] += 100
     return matches, (obj_fwd + obj_rev) / 2
 
-args = None
 def main():
-    global args
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Map word embeddings in two languages into a shared space')
     parser.add_argument('src_input', help='the input source embeddings')
@@ -103,12 +96,6 @@ def main():
     recommended_type.add_argument('--identical', action='store_true', help='recommended if you have no seed dictionary but can rely on identical words')
     recommended_type.add_argument('--identical_custom', action='store_true', help='identical without self')
     recommended_type.add_argument('--fast', action='store_true', help='identical without self')
-    recommended_type.add_argument('--unsupervised', action='store_true', help='recommended if you have no seed dictionary and do not want to rely on identical words')
-    recommended_type.add_argument('--acl2018', action='store_true', help='reproduce our ACL 2018 system')
-    recommended_type.add_argument('--aaai2018', metavar='DICTIONARY', help='reproduce our AAAI 2018 system')
-    recommended_type.add_argument('--acl2017', action='store_true', help='reproduce our ACL 2017 system with numeral initialization')
-    recommended_type.add_argument('--acl2017_seed', metavar='DICTIONARY', help='reproduce our ACL 2017 system with a seed dictionary')
-    recommended_type.add_argument('--emnlp2016', metavar='DICTIONARY', help='reproduce our EMNLP 2016 system')
 
     init_group = parser.add_argument_group('advanced initialization arguments', 'Advanced initialization arguments')
     init_type = init_group.add_mutually_exclusive_group()
@@ -120,26 +107,15 @@ def main():
 
     mapping_group = parser.add_argument_group('advanced mapping arguments', 'Advanced embedding mapping arguments')
     mapping_group.add_argument('--normalize', choices=['unit', 'center', 'unitdim', 'centeremb', 'none'], nargs='*', default=[], help='the normalization actions to perform in order')
-    mapping_group.add_argument('--whiten', action='store_true', help='whiten the embeddings')
-    mapping_group.add_argument('--src_reweight', type=float, default=0, nargs='?', const=1, help='re-weight the source language embeddings')
-    mapping_group.add_argument('--trg_reweight', type=float, default=0, nargs='?', const=1, help='re-weight the target language embeddings')
-    mapping_group.add_argument('--src_dewhiten', choices=['src', 'trg'], help='de-whiten the source language embeddings')
-    mapping_group.add_argument('--trg_dewhiten', choices=['src', 'trg'], help='de-whiten the target language embeddings')
-    mapping_group.add_argument('--dim_reduction', type=int, default=0, help='apply dimensionality reduction')
+    mapping_group.add_argument('--vocabulary', help='restrict source vocab')
     mapping_type = mapping_group.add_mutually_exclusive_group()
     mapping_type.add_argument('-c', '--orthogonal', action='store_true', help='use orthogonal constrained mapping')
     mapping_type.add_argument('-u', '--unconstrained', action='store_true', help='use unconstrained mapping')
 
     self_learning_group = parser.add_argument_group('advanced self-learning arguments', 'Advanced arguments for self-learning')
-    self_learning_group.add_argument('--self_learning', action='store_true', help='enable self-learning')
     self_learning_group.add_argument('--vocabulary_cutoff', type=int, default=0, help='restrict the vocabulary to the top k entries')
-    self_learning_group.add_argument('--direction', choices=['forward', 'backward', 'union'], default='union', help='the direction for dictionary induction (defaults to union)')
     self_learning_group.add_argument('--csls', type=int, nargs='?', default=0, const=10, metavar='NEIGHBORHOOD_SIZE', dest='csls_neighborhood', help='use CSLS for dictionary induction')
-    self_learning_group.add_argument('--threshold', default=0.000001, type=float, help='the convergence threshold (defaults to 0.000001)')
     self_learning_group.add_argument('--validation', default=None, metavar='DICTIONARY', help='a dictionary file for validation at each iteration')
-    self_learning_group.add_argument('--stochastic_initial', default=0.1, type=float, help='initial keep probability stochastic dictionary induction (defaults to 0.1)')
-    self_learning_group.add_argument('--stochastic_multiplier', default=2.0, type=float, help='stochastic dictionary induction multiplier (defaults to 2.0)')
-    self_learning_group.add_argument('--stochastic_interval', default=50, type=int, help='stochastic dictionary induction interval (defaults to 50)')
     self_learning_group.add_argument('--log', help='write to a log file in tsv format at each iteration')
     self_learning_group.add_argument('-v', '--verbose', action='store_true', help='write log information to stderr at each iteration')
     args = parser.parse_args()
@@ -148,26 +124,9 @@ def main():
         parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=2000, csls_neighborhood=0)
     if args.supervised is not None:
         parser.set_defaults(init_dictionary=args.supervised, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', batch_size=1000)
-    if args.semi_supervised is not None:
-        parser.set_defaults(init_dictionary=args.semi_supervised, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
     if args.identical:
         parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
-    if args.unsupervised or args.acl2018:
-        parser.set_defaults(init_unsupervised=True, unsupervised_vocab=4000, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
-    if args.aaai2018:
-        parser.set_defaults(init_dictionary=args.aaai2018, normalize=['unit', 'center'], whiten=True, trg_reweight=1, src_dewhiten='src', trg_dewhiten='trg', batch_size=1000)
-    if args.acl2017:
-        parser.set_defaults(init_numerals=True, orthogonal=True, normalize=['unit', 'center'], self_learning=True, direction='forward', stochastic_initial=1.0, stochastic_interval=1, batch_size=1000)
-    if args.acl2017_seed:
-        parser.set_defaults(init_dictionary=args.acl2017_seed, orthogonal=True, normalize=['unit', 'center'], self_learning=True, direction='forward', stochastic_initial=1.0, stochastic_interval=1, batch_size=1000)
-    if args.emnlp2016:
-        parser.set_defaults(init_dictionary=args.emnlp2016, orthogonal=True, normalize=['unit', 'center'], batch_size=1000)
     args = parser.parse_args()
-
-    # Check command line arguments
-    if (args.src_dewhiten is not None or args.trg_dewhiten is not None) and not args.whiten:
-        print('ERROR: De-whitening requires whitening first', file=sys.stderr)
-        sys.exit(-1)
 
     # Choose the right dtype for the desired precision
     if args.precision == 'fp16':
@@ -178,11 +137,18 @@ def main():
         dtype = 'float64'
 
     # Read input embeddings
+    vocabulary = None
+    if args.vocabulary is not None:
+        vocabulary = set()
+        with open(args.vocabulary, encoding=args.encoding, errors='surrogateescape') as file:
+            for l in file:
+                vocabulary.add(l.split()[0])
+        print(f'vocab size:\t{len(vocabulary)}')
+
     with open(args.src_input, encoding=args.encoding, errors='surrogateescape') as srcfile, \
             open(args.trg_input, encoding=args.encoding, errors='surrogateescape') as trgfile:
-        src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.vocabulary_cutoff)
+        src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.vocabulary_cutoff, vocabulary=vocabulary)
         trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.vocabulary_cutoff)
-
     # NumPy/CuPy management
     if args.cuda:
         if not supports_cupy():
@@ -206,21 +172,8 @@ def main():
     # Build the seed dictionary
     src_indices = []
     trg_indices = []
-    if args.init_numerals:
-        numeral_regex = re.compile('^[0-9]+$')
-        src_numerals = {word for word in src_words if numeral_regex.match(word) is not None}
-        trg_numerals = {word for word in trg_words if numeral_regex.match(word) is not None}
-        numerals = src_numerals.intersection(trg_numerals)
-        for word in numerals:
-            src_indices.append(src_word2ind[word])
-            trg_indices.append(trg_word2ind[word])
-    elif args.init_identical:
-        identical = set(src_words).intersection(set(trg_words))
-        for word in identical:
-            src_indices.append(src_word2ind[word])
-            trg_indices.append(trg_word2ind[word])
-        print(f'count identical {len(identical)}')
-    else:
+   
+    if args.supervised: 
         f = open(args.init_dictionary, encoding=args.encoding, errors='surrogateescape')
         for line in f:
             try:
@@ -237,6 +190,7 @@ def main():
 
     # Read validation dictionary
     if args.validation is not None:
+        print('reading validation', file=sys.stderr)
         f = open(args.validation, encoding=args.encoding, errors='surrogateescape')
         validation = collections.defaultdict(set)
         oov = set()
@@ -264,7 +218,7 @@ def main():
     xw = xp.empty_like(x)
     zw = xp.empty_like(z)
 
-    matches = {}
+    matches = collections.Counter()
     for p in zip(src_indices, trg_indices):
         matches[p] = 1
     identical = set(src_words).intersection(set(trg_words))
@@ -277,11 +231,9 @@ def main():
 
     # Training loop
     it = 1
-    keep_prob = args.stochastic_initial
     t = time.time()
     wprev = 0
     decided = collections.Counter()
-    excluded_src = set()
     while True:
         def flatten_match(matches):
             indices, weights = [list(a) for a in zip(*matches.items())]
@@ -292,25 +244,16 @@ def main():
         # samp_m = sample_matches(matches, p=1)
         src_indices, trg_indices, weights = flatten_match(matches)
         if args.unconstrained:
-            w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
-            # w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
+            # w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
+            w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
             x.dot(w, out=xw)
             zw = z[:]
         else:
-            u, s, vt = xp.linalg.svd((weights * z[trg_indices]).T.dot(x[src_indices]))
+            u, s, vt = xp.linalg.svd((1/weights * z[trg_indices]).T.dot(x[src_indices]))
             # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
             w = vt.T.dot(u.T)
             x.dot(w, out=xw)
             zw = z[:]
-
-        if it % 10 == 0:
-            print('updating decided ....')
-            matchesp = collections.Counter(matches)
-            tops = int(0.25 * len(matchesp))
-            for k, v in matchesp.most_common()[:tops]:
-                if v < 2: continue
-                s, t = k
-                decided[(s, t)] += v
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
@@ -349,10 +292,10 @@ def main():
 
         t = time.time()
         wprev = w
-        matchesprev = matches
         it += 1
 
     with open('dict.tmp', mode='w') as f:
+        decided = matches
         for p in decided:
             si = p[0]
             ti = p[1]
