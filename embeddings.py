@@ -99,7 +99,7 @@ def faiss_csls(Q, X, k, dist='IP', csls=10):
     # this k is neighborhood
     sim_bwd, _ = faiss_knn(X, Q, k=csls)
     knn_sim_bwd = sim_bwd.mean(axis=1)
-    topvals, topinds = faiss_knn(Q, X, k=k)
+    topvals, topinds = faiss_knn(Q, X, k=2*csls)
     for i in range(topvals.shape[0]):
         topvals[i] = 2 * topvals[i] - knn_sim_bwd[topinds[i]]
     ind = (-topvals).argsort(axis=1)

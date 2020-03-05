@@ -23,8 +23,10 @@ import re
 import sys
 import time
 from scipy.special import softmax
-xp = np
 
+import os
+xp = np
+OUTPUTDIR = '_OUTPUT'
 def sample(xw, zw, T, kbest=10):
     pass
 
@@ -53,7 +55,7 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
         # topprobs = softmax(topvali / 0.02)
         # j = xp.random.choice(range(numcands), p=topprobs)
         # hit = topinds[i, j]
-        for j in range(1):
+        for j in range(kbest):
             hit = topinds[i, j]
             if (i, hit) not in matches:
                 matches[(i, hit)] = topvali[j]
@@ -61,9 +63,9 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
     return matches, objective
 
 
-def find_matches(xw, zw, cum_weights, T, csls=0, kbest=30, decay=1.01):
-    matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=10)
-    matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=10)
+def find_matches(xw, zw, cum_weights, T, csls=0, kbest=3, decay=1.01):
+    matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=kbest)
+    matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=kbest)
     matches = collections.Counter()
 
     # for m in matches_fwd:
@@ -100,6 +102,7 @@ def main():
     parser.add_argument('--batch_size', default=10000, type=int, help='batch size (defaults to 10000); does not affect results, larger is usually faster but uses more memory')
     parser.add_argument('--seed', type=int, default=0, help='the random seed (defaults to 0)')
     parser.add_argument('--maxiter', type=int, default=10, help='max number of iterations')
+    parser.add_argument('--corekbest', type=int, default=2, help='nn ranking to be considered as a match')
     parser.add_argument('--decayrate', type=float, default=1.01, help='for boosting')
     parser.add_argument('--dictname', default='dict.tmp', help='output the dictionary')
 
@@ -141,6 +144,7 @@ def main():
     if args.identical:
         parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
     args = parser.parse_args()
+    print(args, file=sys.stderr)
 
     # Choose the right dtype for the desired precision
     if args.precision == 'fp16':
@@ -149,6 +153,8 @@ def main():
         dtype = 'float32'
     elif args.precision == 'fp64':
         dtype = 'float64'
+
+    os.makedirs(OUTPUTDIR, exist_ok=True)
 
     # Read input embeddings
     vocabulary = None
@@ -265,9 +271,8 @@ def main():
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
-        matches, objective = find_matches(xw, zw, cum_weights, T=T, csls=args.csls_neighborhood, decay=args.decayrate)
+        matches, objective = find_matches(xw, zw, cum_weights, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
         matches = sample_matches(matches, p=0.95)
-
 
         for m in matches:
             decided[m] += 1
@@ -299,6 +304,12 @@ def main():
             print('{0}\t{1:.6f}\t{2}\t{3:.6f}'.format(it, 100 * objective, val, duration), file=log)
             log.flush()
 
+        if it % 5 == 0 or it >= args.maxiter:
+            with open(f'{OUTPUTDIR}/{args.dictname}.{it}.dict', mode='w') as f:
+                for p in decided.most_common():
+                    si, ti = p[0]
+                    print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]:.3f}', file=f)
+
         if it >= args.maxiter:
             break
 
@@ -306,10 +317,7 @@ def main():
         wprev = w
         it += 1
 
-    with open(args.dictname, mode='w') as f:
-        for p in decided.most_common():
-            si, ti = p[0]
-            print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]:.3f}', file=f)
+
 
     # write mapped embeddings
     print('**** reading and writing final embeddings ****', file=sys.stderr)
