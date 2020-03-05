@@ -23,32 +23,7 @@ import re
 import sys
 import time
 from scipy.special import softmax
-
 xp = np
-def dropout(m, p):
-    if p <= 0.0:
-        return m
-    else:
-        xp = get_array_module(m)
-        mask = xp.random.rand(*m.shape) >= p
-        return m*mask
-
-def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
-    xp = get_array_module(m)
-    n = m.shape[0]
-    ans = xp.zeros(n, dtype=m.dtype)
-    if k <= 0:
-        return ans
-    if not inplace:
-        m = xp.array(m)
-    ind0 = xp.arange(n)
-    ind1 = xp.empty(n, dtype=int)
-    minimum = m.min()
-    for i in range(k):
-        m.argmax(axis=1, out=ind1)
-        ans += m[ind0, ind1]
-        m[ind0, ind1] = minimum
-    return ans / k
 
 def sample(xw, zw, T, kbest=10):
     pass
@@ -64,7 +39,7 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
     # match = (sind, tind, weight?)
     # numcands = kbest
     topvals, topinds = embeddings.faiss_knn(xw, zw, k=kbest, dist='IP')
-    numcands = 30
+    # numcands = 30
     # topvals, topinds = embeddings.faiss_csls(xw, zw, k=numcands, dist='IP')
     objective = np.mean(topvals[:, 0])
     mean = np.mean(topvals[:, 0])
@@ -74,9 +49,9 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
     print(f'std\t{std:.2%}')
     for i in range(xw.shape[0]):
         topvali = topvals[i]
-        j = topvali.argmax()
+        j = 0
         valmax = topvali[j]
-        if valmax < mean:
+        if valmax < mean - 0.5 * std:
             continue
         # topprobs = softmax(topvali / 0.02)
         # j = xp.random.choice(range(numcands), p=topprobs)
@@ -88,7 +63,7 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3):
     return matches, objective
 
 
-def find_matches(matches, xw, zw, T, kbest=30):
+def find_matches(matches, xw, zw, excluded, T, kbest=30):
     matches_fwd, obj_fwd = _find_matches(xw, zw, T, kbest=10)
     matches_rev, obj_rev = _find_matches(zw, xw, T, kbest=10)
     matches = {}
@@ -97,6 +72,8 @@ def find_matches(matches, xw, zw, T, kbest=30):
     for r in matches_rev:
         m = (r[1], r[0])
         if m in matches_fwd:
+            if m in excluded:
+                continue
             matches[m] = 0.5 * (matches_rev[r] + matches_fwd[m])
         # else:
         #     matches[m] = 1
@@ -245,7 +222,7 @@ def main():
         f = open(args.init_dictionary, encoding=args.encoding, errors='surrogateescape')
         for line in f:
             try:
-                src, trg = line.split()
+                src, trg = line.split()[:2]
             except ValueError:
                 continue
             try:
@@ -284,6 +261,7 @@ def main():
     # Allocate memory
     xw = xp.empty_like(x)
     zw = xp.empty_like(z)
+
     matches = {}
     for p in zip(src_indices, trg_indices):
         matches[p] = 1
@@ -300,6 +278,8 @@ def main():
     keep_prob = args.stochastic_initial
     t = time.time()
     wprev = 0
+    decided = collections.Counter()
+    excluded_src = set()
     while True:
         def flatten_match(matches):
             indices, weights = [list(a) for a in zip(*matches.items())]
@@ -321,9 +301,17 @@ def main():
             x.dot(w, out=xw)
             zw = z[:]
 
+        if it % 10 == 0:
+            print('updating decided ....')
+            matchesp = collections.Counter(matches)
+            tops = int(0.25 * len(matchesp))
+            for k, v in matchesp.most_common()[:tops]:
+                s, t = k
+                decided[(s, t)] += v
+
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
-        matches, objective = find_matches(matches, xw, zw, T=T)
+        matches, objective = find_matches(matches, xw, zw, decided, T=T)
         
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
@@ -340,7 +328,7 @@ def main():
             print('ITERATION {0} ({1:.2f}s)'.format(it, duration), file=sys.stderr)
             print('\t- Objective:        {0:9.4f}%'.format(100 * objective), file=sys.stderr)
             print(f'\t- Temp:             {T:.3f}', file=sys.stderr)
-            print(f'\t- #Anchors:             {len(matches)}', file=sys.stderr)
+            print(f'\t- #match/#decided:             {len(matches)}/{len(decided)}', file=sys.stderr)
             print(f'\t- DeltaW:             {np.linalg.norm(w - wprev):.3f}', file=sys.stderr)
             if args.validation is not None:
                 print('\t- Val. similarity:  {0:9.4f}%'.format(100 * similarity), file=sys.stderr)
@@ -354,16 +342,18 @@ def main():
             log.flush()
 
         if it >= args.maxiter:
-            with open('matches.tmp', mode='w') as f:
-                for p in matches:
-                    si = p[0]
-                    ti = p[1]
-                    print(f'{src_words[si]}\t{trg_words[ti]}\t{matches[p]:.3f}', file=f)
             break
 
         t = time.time()
         wprev = w
+        matchesprev = matches
         it += 1
+
+    with open('dict.tmp', mode='w') as f:
+        for p in decided:
+            si = p[0]
+            ti = p[1]
+            print(f'{src_words[si]}\t{trg_words[ti]}\t{decided[p]:.3f}', file=f)
 
     # write mapped embeddings
     print('**** reading and writing final embeddings ****', file=sys.stderr)

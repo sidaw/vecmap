@@ -79,7 +79,7 @@ def main():
             stscore = scores[s][t]
             print(f'{s}\t{t}\t{allstats[s][t]}\t{stscore}')
 
-    prec = np.mean([1 if f[1] == 'TP' else 0 for f in statsp])
+    prec = np.mean([1 if f[1] == 'TP' else 0 for f in statsp if f[1] != 'missing'])
     recall = np.mean([1 if f[1] == 'TP' else 0 for f in statsr])
     eps = 1e-10
     F = 0 if prec < eps or recall < eps else 2 / (1/prec + 1/recall)
