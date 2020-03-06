@@ -63,17 +63,17 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
     return matches, objective
 
 
-def find_matches(xw, zw, cum_weights, T, csls=0, kbest=3, decay=1.01):
+def find_matches(xw, zw, cum_weights, unmatched, T, csls=0, kbest=3, decay=1.01):
     matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=kbest)
     matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=kbest)
     matches = collections.Counter()
 
-    # for m in matches_fwd:
-    #     matches[m] += matches_fwd[m]
+    for m in matches_fwd:
+        unmatched[m] += matches_fwd[m]
         
     for r in matches_rev:
         m = (r[1], r[0])
-        # matches[m] += matches_rev[r]
+        unmatched[m] += matches_rev[r]
         if m in matches_fwd:
             if m not in cum_weights:
                 cum_weights[m] = 1
@@ -255,6 +255,7 @@ def main():
     wprev = 0
     decided = collections.Counter()
     cum_weights = collections.Counter(matches)
+    unmatched = collections.Counter()
     while True:
         src_indices, trg_indices, weights = flatten_match(matches, cum_weights)
         keepprob = 0.5 + 0.5 * np.random.rand()
@@ -275,10 +276,12 @@ def main():
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
-        matches, objective = find_matches(xw, zw, cum_weights, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
+        matches, objective = find_matches(xw, zw, cum_weights, unmatched, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
         matches = sample_matches(matches, p=keepprob)
         for m in matches:
             decided[m] += matches[m]
+        for m in unmatched:
+            decided[m] = unmatched[m]
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())
@@ -319,7 +322,6 @@ def main():
         t = time.time()
         wprev = w
         it += 1
-
 
 
     # write mapped embeddings

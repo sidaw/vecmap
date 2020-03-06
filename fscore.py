@@ -90,7 +90,7 @@ def main():
     if args.predmode:
         for s in ref:
             for tscore in scores[s].most_common():
-                t, score =  tscore
+                t, score = tscore
                 print(f'{s}\t{t}\t{score}')
         return
 
