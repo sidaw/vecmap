@@ -78,7 +78,7 @@ def find_matches(xw, zw, cum_weights, T, csls=0, kbest=3, decay=1.01):
             if m not in cum_weights:
                 cum_weights[m] = 1
             else:
-                cum_weights[m] = cum_weights[m] * 1.1
+                cum_weights[m] = cum_weights[m] * decay
             matches[m] = 1
     return matches, (obj_fwd + obj_rev) / 2
 
@@ -257,6 +257,8 @@ def main():
     cum_weights = collections.Counter(matches)
     while True:
         src_indices, trg_indices, weights = flatten_match(matches, cum_weights)
+        keepprob = 0.5 + 0.5 * np.random.rand()
+        
         embeddings.noise(x)
         embeddings.noise(z)
         if args.unconstrained:
@@ -274,8 +276,7 @@ def main():
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
         matches, objective = find_matches(xw, zw, cum_weights, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
-        matches = sample_matches(matches, p=0.5 + 0.5 * np.random.rand())
-
+        matches = sample_matches(matches, p=keepprob)
         for m in matches:
             decided[m] += matches[m]
         # Accuracy and similarity evaluation in validation
