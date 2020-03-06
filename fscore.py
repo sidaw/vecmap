@@ -7,12 +7,19 @@ import numpy as np
 import sys
 
 def readdict(f):
-    d = collections.defaultdict(set)
+    d = collections.OrderedDict()
     for line in f:
-        s, t = line.split()[:2]
-        assert(s == s.strip())
-        assert(t == t.strip())
-        d[s].add(t)
+        l = line.split()[:2]
+        if len(l) == 1:
+            s = l[0].strip()
+            d[s] = set()
+        else:
+            s, t = line.split()[:2]
+            assert(s == s.strip())
+            assert(t == t.strip())
+            if s not in d:
+                d[s] = set()
+            d[s].add(t)
     return d
 
 def readpreds(f, k=3, thres=0.3):
@@ -44,6 +51,7 @@ def main():
     parser.add_argument('--encoding', default='utf-8', help='the character encoding for input/output (defaults to utf-8)')
     parser.add_argument('--k', default=2, type=int, help='the max amount of predictions per word')
     parser.add_argument('--thres', default=0.3, type=float, help='the threshold')
+    parser.add_argument('--predmode', action='store_true', help='output in source order instead of confidence order')
     args = parser.parse_args()
 
     with open(args.dictionary, encoding=args.encoding, errors='surrogateescape') as f:
@@ -72,9 +80,19 @@ def main():
     for l in statsp + statsr:
         st, status = l
         s, t = st
+        if s not in ref:
+            # filter out random predictions
+            continue
         if t in allstats[s]:
             assert allstats[s][t] == 'TP'
         allstats[s][t] = status
+
+    if args.predmode:
+        for s in ref:
+            for tscore in scores[s].most_common():
+                t, score =  tscore
+                print(f'{s}\t{t}\t{score}')
+        return
 
     for s in allstats:
         for t in allstats[s]:
