@@ -68,23 +68,22 @@ def find_matches(xw, zw, cum_weights, T, csls=0, kbest=3, decay=1.01):
     matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=kbest)
     matches = collections.Counter()
 
-    # for m in matches_fwd:
-    #     if m in excluded:
-    #         continue
-        # matches[m] += matches_fwd[m]
+    for m in matches_fwd:
+        matches[m] += matches_fwd[m]
     for r in matches_rev:
         m = (r[1], r[0])
-        # matches[m] += matches_rev[r]
+        matches[m] += matches_rev[r]
         if m in matches_fwd:
             if m not in cum_weights:
                 cum_weights[m] = 1
             else:
                 cum_weights[m] = cum_weights[m] / decay
-            matches[m] = cum_weights[m]
+            matches[m] += 0.5
     return matches, (obj_fwd + obj_rev) / 2
 
-def flatten_match(matches, dtype='float32'):
-    indices, weights = [list(a) for a in zip(*matches.items())]
+def flatten_match(matches, cum_weights, dtype='float32'):
+    indices = list(matches.keys())
+    weights = [cum_weights[p] for p in indices]
     weights = xp.array(weights, dtype=dtype)[:, None]
     src_indices, trg_indices = [list(a) for a in zip(*indices)]
     return src_indices, trg_indices, weights
@@ -254,9 +253,11 @@ def main():
     t = time.time()
     wprev = 0
     decided = collections.Counter()
-    cum_weights = collections.Counter()
+    cum_weights = collections.Counter(matches)
     while True:
-        src_indices, trg_indices, weights = flatten_match(matches)
+        src_indices, trg_indices, weights = flatten_match(matches, cum_weights)
+        embeddings.noise(x)
+        embeddings.noise(z)
         if args.unconstrained:
             w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
             # w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
@@ -275,7 +276,7 @@ def main():
         matches = sample_matches(matches, p=0.95)
 
         for m in matches:
-            decided[m] += 1
+            decided[m] += matches[m]
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())
@@ -308,7 +309,7 @@ def main():
             with open(f'{OUTPUTDIR}/{args.dictname}.{it}.dict', mode='w') as f:
                 for p in decided.most_common():
                     si, ti = p[0]
-                    print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]:.3f}', file=f)
+                    print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]/it:.3f}', file=f)
 
         if it >= args.maxiter:
             break

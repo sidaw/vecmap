@@ -106,3 +106,11 @@ def faiss_csls(Q, X, k, dist='IP', csls=10):
     topvals = np.take_along_axis(topvals, ind, axis=1)
     topinds = np.take_along_axis(topinds, ind, axis=1)
     return topvals, topinds
+
+def noise(X):
+    xp = get_array_module(X)
+    noise = np.random.randn(1, X.shape[1])
+    noise /= xp.sqrt(xp.sum(noise**2))
+    randinds = np.random.randint(X.shape[1], size=1)
+    X -= np.mean(X[randinds, :], axis=0)
+    normalize(X, ['unit', 'center', 'unit'])
