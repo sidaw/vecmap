@@ -21,6 +21,7 @@ def readpreds(f, k=3, thres=0.3):
         s, t, score = line.split('\t')[:3]
         score = float(score)
         # for BUCC, always add the first prediction
+        # assuming sorted
         if score < thres and s in d:
             continue
         d[s][t] = score

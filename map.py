@@ -68,17 +68,18 @@ def find_matches(xw, zw, cum_weights, T, csls=0, kbest=3, decay=1.01):
     matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=kbest)
     matches = collections.Counter()
 
-    for m in matches_fwd:
-        matches[m] += matches_fwd[m]
+    # for m in matches_fwd:
+    #     matches[m] += matches_fwd[m]
+        
     for r in matches_rev:
         m = (r[1], r[0])
-        matches[m] += matches_rev[r]
+        # matches[m] += matches_rev[r]
         if m in matches_fwd:
             if m not in cum_weights:
                 cum_weights[m] = 1
             else:
-                cum_weights[m] = cum_weights[m] / decay
-            matches[m] += 0.5
+                cum_weights[m] = cum_weights[m] * 1.1
+            matches[m] = 1
     return matches, (obj_fwd + obj_rev) / 2
 
 def flatten_match(matches, cum_weights, dtype='float32'):
@@ -273,7 +274,7 @@ def main():
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
         matches, objective = find_matches(xw, zw, cum_weights, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
-        matches = sample_matches(matches, p=0.95)
+        matches = sample_matches(matches, p=0.5 + 0.5 * np.random.rand())
 
         for m in matches:
             decided[m] += matches[m]
