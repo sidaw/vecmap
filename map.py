@@ -106,13 +106,9 @@ def main():
     parser.add_argument('--decayrate', type=float, default=1.01, help='for boosting')
     parser.add_argument('--dictname', default='dict.tmp', help='output the dictionary')
 
-    recommended_group = parser.add_argument_group('recommended settings', 'Recommended settings for different scenarios')
-    recommended_type = recommended_group.add_mutually_exclusive_group()
+    recommended_type = parser.add_argument_group('recommended settings', 'Recommended settings for different scenarios')
     recommended_type.add_argument('--supervised', metavar='DICTIONARY', help='recommended if you have a large training dictionary')
-    recommended_type.add_argument('--semi_supervised', metavar='DICTIONARY', help='recommended if you have a small seed dictionary')
-    recommended_type.add_argument('--identical', action='store_true', help='recommended if you have no seed dictionary but can rely on identical words')
-    recommended_type.add_argument('--identical_custom', action='store_true', help='identical without self')
-    recommended_type.add_argument('--fast', action='store_true', help='identical without self')
+    recommended_type.add_argument('--identical', default=True, help='recommended if you have no seed dictionary but can rely on identical words')
 
     init_group = parser.add_argument_group('advanced initialization arguments', 'Advanced initialization arguments')
     init_type = init_group.add_mutually_exclusive_group()
@@ -137,12 +133,7 @@ def main():
     self_learning_group.add_argument('-v', '--verbose', action='store_true', help='write log information to stderr at each iteration')
     args = parser.parse_args()
 
-    if args.fast:
-        parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=2000, csls_neighborhood=0)
-    if args.supervised is not None:
-        parser.set_defaults(init_dictionary=args.supervised, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', batch_size=1000)
-    if args.identical:
-        parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
+    parser.set_defaults(init_dictionary=args.supervised, normalize=['unit', 'center', 'unit'])
     args = parser.parse_args()
     print(args, file=sys.stderr)
 
@@ -193,7 +184,7 @@ def main():
     src_indices = []
     trg_indices = []
    
-    if args.supervised: 
+    if args.supervised:
         f = open(args.init_dictionary, encoding=args.encoding, errors='surrogateescape')
         for line in f:
             try:
@@ -239,13 +230,18 @@ def main():
     zw = xp.empty_like(z)
 
     matches = collections.Counter()
+    decided = collections.Counter()
+    cum_weights = collections.Counter(matches)
+    unmatched = collections.Counter()
     for p in zip(src_indices, trg_indices):
         matches[p] = 1
+        cum_weights[p] = 1
     identical = set(src_words).intersection(set(trg_words))
     for word in identical:
         p = (src_word2ind[word], trg_word2ind[word])
         matches[p] = 1
-
+        cum_weights[p] = 1
+        
     if args.validation is not None:
         simval = xp.empty((len(validation.keys()), z.shape[0]), dtype=dtype)
 
@@ -253,15 +249,14 @@ def main():
     it = 1
     t = time.time()
     wprev = 0
-    decided = collections.Counter()
-    cum_weights = collections.Counter(matches)
-    unmatched = collections.Counter()
+    
     while True:
         src_indices, trg_indices, weights = flatten_match(matches, cum_weights)
         keepprob = 0.5 + 0.5 * np.random.rand()
-        
+
         embeddings.noise(x)
         embeddings.noise(z)
+
         if args.unconstrained:
             w = np.linalg.lstsq(np.sqrt(weights) * x[src_indices], np.sqrt(weights) * z[trg_indices], rcond=None)[0]
             # w = np.linalg.lstsq(x[src_indices], z[trg_indices], rcond=None)[0]
@@ -277,7 +272,7 @@ def main():
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
         matches, objective = find_matches(xw, zw, cum_weights, unmatched, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
-        matches = sample_matches(matches, p=keepprob)
+        # matches = sample_matches(matches, p=keepprob)
         for m in matches:
             decided[m] += matches[m]
         for m in unmatched:

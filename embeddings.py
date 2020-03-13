@@ -111,6 +111,21 @@ def noise(X):
     xp = get_array_module(X)
     noise = np.random.randn(1, X.shape[1])
     noise /= xp.sqrt(xp.sum(noise**2))
-    randinds = np.random.randint(X.shape[1], size=1)
+    size = np.random.randint(1, 3)
+    size = 1 
+    randinds = np.random.randint(X.shape[1], size=size)
     X -= np.mean(X[randinds, :], axis=0)
     normalize(X, ['unit', 'center', 'unit'])
+
+
+def joint_noise(X, Y):
+    xp = get_array_module(X)
+    noise = np.random.randn(1, X.shape[1])
+    noise /= xp.sqrt(xp.sum(noise**2))
+    randinds = np.random.randint(X.shape[1], size=1)
+    
+    randcenter = np.mean(X[randinds, :], axis=0)
+    X -= randcenter
+    Y -= randcenter
+    normalize(X, ['unit', 'center', 'unit'])
+    normalize(Y, ['unit', 'center', 'unit'])
