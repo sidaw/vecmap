@@ -37,7 +37,7 @@ def sample_matches(matches, p=0.3):
             sampled[k] = matches[k]
     return sampled
 
-def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
+def _find_matches(xw, zw, T, kbest=2, threshold=0.3, csls=0):
     if csls > 0:
         topvals, topinds = embeddings.faiss_csls(xw, zw, k=kbest, csls=csls, dist='IP')
     else:
@@ -63,22 +63,22 @@ def _find_matches(xw, zw, T, kbest=30, threshold=0.3, csls=0):
     return matches, objective
 
 
-def find_matches(xw, zw, cum_weights, unmatched, T, csls=0, kbest=3, decay=1.01):
+def find_matches(xw, zw, cum_weights, score, T, csls=0, kbest=3, decay=1.01):
     matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=kbest)
     matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=kbest)
     matches = collections.Counter()
 
     for m in matches_fwd:
-        unmatched[m] += matches_fwd[m]
-        
+        score[m] += matches_fwd[m]
+
     for r in matches_rev:
         m = (r[1], r[0])
-        unmatched[m] += matches_rev[r]
+        score[m] += matches_rev[r]
         if m in matches_fwd:
             if m not in cum_weights:
                 cum_weights[m] = 1
             else:
-                cum_weights[m] = cum_weights[m] * decay
+                cum_weights[m] = 1
             matches[m] = 1
     return matches, (obj_fwd + obj_rev) / 2
 
@@ -232,7 +232,7 @@ def main():
     matches = collections.Counter()
     decided = collections.Counter()
     cum_weights = collections.Counter(matches)
-    unmatched = collections.Counter()
+    score = collections.Counter()
     for p in zip(src_indices, trg_indices):
         matches[p] = 1
         cum_weights[p] = 1
@@ -271,12 +271,12 @@ def main():
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
-        matches, objective = find_matches(xw, zw, cum_weights, unmatched, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
+        matches, objective = find_matches(xw, zw, cum_weights, score, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
         # matches = sample_matches(matches, p=keepprob)
         for m in matches:
             decided[m] += matches[m]
-        for m in unmatched:
-            decided[m] = unmatched[m]
+        for m in score:
+            decided[m] = score[m]
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())
@@ -305,11 +305,10 @@ def main():
             print('{0}\t{1:.6f}\t{2}\t{3:.6f}'.format(it, 100 * objective, val, duration), file=log)
             log.flush()
 
-        if it % 5 == 0 or it >= args.maxiter:
-            with open(f'{OUTPUTDIR}/{args.dictname}.{it}.dict', mode='w') as f:
-                for p in decided.most_common():
-                    si, ti = p[0]
-                    print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]/it:.3f}', file=f)
+        with open(f'{OUTPUTDIR}/{args.dictname}.{it}', mode='w') as f:
+            for p in decided.most_common():
+                si, ti = p[0]
+                print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]/it:.3f}', file=f)
 
         if it >= args.maxiter:
             break
