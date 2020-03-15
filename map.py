@@ -57,29 +57,28 @@ def _find_matches(xw, zw, T, kbest=2, threshold=0.3, csls=0):
         # hit = topinds[i, j]
         for j in range(kbest):
             hit = topinds[i, j]
-            if (i, hit) not in matches:
-                matches[(i, hit)] = topvali[j]
+            matches[(i, hit)] = (j, topvali[j])
         # matches[(i, hit)] = (1-eta) * matches[(i, hit)] + eta * topvali[j]
     return matches, objective
 
 
-def find_matches(xw, zw, cum_weights, score, T, csls=0, kbest=3, decay=1.01):
-    matches_fwd, obj_fwd = _find_matches(xw, zw, T, csls=csls, kbest=kbest)
-    matches_rev, obj_rev = _find_matches(zw, xw, T, csls=csls, kbest=kbest)
+def find_matches(xw, zw, cum_weights, score, ul, T, csls=0, kbest=3, decay=1.01):
+    matches_fwd, obj_fwd = _find_matches(xw[:ul], zw[:ul], T, csls=csls, kbest=kbest)
+    matches_rev, obj_rev = _find_matches(zw[:ul], xw[:ul], T, csls=csls, kbest=kbest)
     matches = collections.Counter()
 
     for m in matches_fwd:
-        score[m] += matches_fwd[m]
+        score[m] += matches_fwd[m][1]
 
     for r in matches_rev:
         m = (r[1], r[0])
-        score[m] += matches_rev[r]
+        score[m] += matches_rev[r][1]
         if m in matches_fwd:
             if m not in cum_weights:
                 cum_weights[m] = 1
             else:
                 cum_weights[m] = 1
-            matches[m] = 1
+            matches[m] = (1 / (1 + matches_fwd[m][0]) + 1 / (1 + matches_rev[r][0])) * 0.5
     return matches, (obj_fwd + obj_rev) / 2
 
 def flatten_match(matches, cum_weights, dtype='float32'):
@@ -104,6 +103,7 @@ def main():
     parser.add_argument('--maxiter', type=int, default=10, help='max number of iterations')
     parser.add_argument('--corekbest', type=int, default=2, help='nn ranking to be considered as a match')
     parser.add_argument('--decayrate', type=float, default=1.01, help='for boosting')
+    parser.add_argument('--init_vocab', type=int, default=10000, help='for boosting')
     parser.add_argument('--dictname', default='dict.tmp', help='output the dictionary')
 
     recommended_type = parser.add_argument_group('recommended settings', 'Recommended settings for different scenarios')
@@ -235,12 +235,12 @@ def main():
     score = collections.Counter()
     for p in zip(src_indices, trg_indices):
         matches[p] = 1
-        cum_weights[p] = 1
+        decided[p] = 1
     identical = set(src_words).intersection(set(trg_words))
     for word in identical:
         p = (src_word2ind[word], trg_word2ind[word])
         matches[p] = 1
-        cum_weights[p] = 1
+        decided[p] = 1
         
     if args.validation is not None:
         simval = xp.empty((len(validation.keys()), z.shape[0]), dtype=dtype)
@@ -249,11 +249,12 @@ def main():
     it = 1
     t = time.time()
     wprev = 0
-    
+    current_vocab = args.init_vocab
+    Stats = collections.namedtuple('MatchStats', ['w_dot', 'mean_dot', 'delta_w', 'current_vocab'])
+    pstats = None
+    stats = None
     while True:
-        src_indices, trg_indices, weights = flatten_match(matches, cum_weights)
-        keepprob = 0.5 + 0.5 * np.random.rand()
-
+        src_indices, trg_indices, weights = flatten_match(matches, decided)
         embeddings.noise(x)
         embeddings.noise(z)
 
@@ -268,15 +269,24 @@ def main():
             w = vt.T.dot(u.T)
             x.dot(w, out=xw)
             zw = z[:]
+            w_dot = np.sum(weights * z[trg_indices] * xw[src_indices]) / weights.sum()
+            mean_dot = np.sum(z[trg_indices] * xw[src_indices]) / len(src_indices)
+            delta_w = np.linalg.norm(w - wprev)
+            stats = Stats(w_dot=w_dot, mean_dot=mean_dot, delta_w=delta_w, current_vocab=current_vocab)
+
+        if it > 1 and stats.w_dot <= pstats.w_dot + 1e-6:
+            current_vocab = min(int(current_vocab * 1.05), args.vocabulary_cutoff)
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
-        matches, objective = find_matches(xw, zw, cum_weights, score, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
-        # matches = sample_matches(matches, p=keepprob)
+        score = collections.Counter()
+        cum_weights = collections.Counter()
+        matches, objective = find_matches(xw, zw, cum_weights, score, ul=current_vocab, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
+
+        for m in score:
+            decided[m] += score[m] / 2
         for m in matches:
             decided[m] += matches[m]
-        for m in score:
-            decided[m] = score[m]
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())
@@ -285,15 +295,20 @@ def main():
             accuracy = np.mean([1 if nn[i] in validation[src[i]] else 0 for i in range(len(src))])
             similarity = np.mean([np.max([simval[i, j].tolist() for j in validation[src[i]]]) for i in range(len(src))])
 
+        with open(f'{OUTPUTDIR}/{args.dictname}.{it}', mode='w') as f:
+            for p in decided.most_common():
+                si, ti = p[0]
+                print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]/it:.3f}', file=f)
+
         # Logging
         duration = time.time() - t
+
         if args.verbose:
             print(file=sys.stderr)
             print('ITERATION {0} ({1:.2f}s)'.format(it, duration), file=sys.stderr)
             print('\t- Objective:        {0:9.4f}%'.format(100 * objective), file=sys.stderr)
-            print(f'\t- Temp:             {T:.3f}', file=sys.stderr)
-            print(f'\t- #match/#decided:             {len(matches)}/{len(decided)}', file=sys.stderr)
-            print(f'\t- DeltaW:             {np.linalg.norm(w - wprev):.3f}', file=sys.stderr)
+            print(f'\t- #match/#decided:             {len(src_indices)}/{len(decided)}', file=sys.stderr)
+            print(stats, file=sys.stderr)
             if args.validation is not None:
                 print('\t- Val. similarity:  {0:9.4f}%'.format(100 * similarity), file=sys.stderr)
                 print('\t- Val. accuracy:    {0:9.4f}%'.format(100 * accuracy), file=sys.stderr)
@@ -305,16 +320,11 @@ def main():
             print('{0}\t{1:.6f}\t{2}\t{3:.6f}'.format(it, 100 * objective, val, duration), file=log)
             log.flush()
 
-        with open(f'{OUTPUTDIR}/{args.dictname}.{it}', mode='w') as f:
-            for p in decided.most_common():
-                si, ti = p[0]
-                print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]/it:.3f}', file=f)
-
         if it >= args.maxiter:
             break
-
         t = time.time()
         wprev = w
+        pstats = stats
         it += 1
 
 
