@@ -22,14 +22,19 @@ def readdict(f):
             d[s].add(t)
     return d
 
-def readpreds(f, k=3, thres=0.3):
+def readpreds(f, k=3, thres=0.3, maxgap=0.3):
     d = collections.defaultdict(lambda: collections.Counter())
+    maxval = collections.Counter()
     for line in f:
         s, t, score = line.split('\t')[:3]
         score = float(score)
+        if score > maxval[s]:
+            maxval[s] = score
         # for BUCC, always add the first prediction
         # assuming sorted
         if score < thres:
+            continue
+        if maxval[s] - score > maxgap:
             continue
         d[s][t] = score
     pred = collections.defaultdict(set)
@@ -51,13 +56,14 @@ def main():
     parser.add_argument('--encoding', default='utf-8', help='the character encoding for input/output (defaults to utf-8)')
     parser.add_argument('--k', default=2, type=int, help='the max amount of predictions per word')
     parser.add_argument('--thres', default=0.3, type=float, help='the threshold')
+    parser.add_argument('--maxgap', default=10, type=float, help='the maximum gap with the biggest')
     parser.add_argument('--predmode', action='store_true', help='output in source order instead of confidence order')
     args = parser.parse_args()
 
     with open(args.dictionary, encoding=args.encoding, errors='surrogateescape') as f:
         ref = readdict(f)
     with open(args.translations, encoding=args.encoding, errors='surrogateescape') as f:
-        trans, scores = readpreds(f, args.k, args.thres)
+        trans, scores = readpreds(f, args.k, args.thres, args.maxgap)
 
     def precision(testd, refd, tag='FP'):
         stats = []

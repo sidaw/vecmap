@@ -282,7 +282,7 @@ def main():
     pstats = None
     stats = None
     while True:
-        src_indices, trg_indices, weights = flatten_match(matches, decided)
+        src_indices, trg_indices, weights = flatten_match(matches, matches)
         embeddings.noise(x)
         embeddings.noise(z)
 
@@ -318,8 +318,8 @@ def main():
             if m in score:
                 eta = 1/it
             else:
-                eta = max(0.2, 1/it)
-            decided[m] = decided[m]*(1-eta) + score[m]*eta/2 + matches[m]*eta/2
+                eta = max(0.5, 1/it)
+            decided[m] = decided[m]*(1-eta) + score[m]*eta
 
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
