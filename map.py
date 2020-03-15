@@ -78,7 +78,8 @@ def find_matches(xw, zw, cum_weights, score, ul, T, csls=0, kbest=3, decay=1.01)
                 cum_weights[m] = 1
             else:
                 cum_weights[m] = 1
-            matches[m] = (1 / (1 + matches_fwd[m][0]) + 1 / (1 + matches_rev[r][0])) * 0.5
+            # matches[m] = (1 / (1 + matches_fwd[m][0]) + 1 / (1 + matches_rev[r][0])) * 0.5
+            matches[m] = 1
     return matches, (obj_fwd + obj_rev) / 2
 
 def flatten_match(matches, cum_weights, dtype='float32'):
@@ -87,6 +88,33 @@ def flatten_match(matches, cum_weights, dtype='float32'):
     weights = xp.array(weights, dtype=dtype)[:, None]
     src_indices, trg_indices = [list(a) for a in zip(*indices)]
     return src_indices, trg_indices, weights
+
+from collections import Counter
+def sharpen(ssharp, niters=5):
+    for _ in range(niters):
+        s1sum = Counter()
+        s2sum = Counter()
+        for ij in ssharp:
+            i, j = ij
+            s1sum[i] += ssharp[i, j]
+
+        for ij in ssharp:
+            i, j = ij
+            ssharp[ij] = ssharp[ij] / (s1sum[i] + 1e-2)
+
+        for ij in ssharp:
+            ssharp[ij] = np.power(ssharp[ij], 1.5)
+        
+        for ij in ssharp:
+            i, j = ij
+            s2sum[j] += ssharp[i, j]
+
+        for ij in ssharp:
+            i, j = ij
+            ssharp[ij] = ssharp[ij] / (s2sum[j] + 1e-2)
+        for ij in ssharp:
+            ssharp[ij] = np.power(ssharp[ij], 1.5)
+
 
 def main():
     # Parse command line arguments
@@ -272,10 +300,10 @@ def main():
             w_dot = np.sum(weights * z[trg_indices] * xw[src_indices]) / weights.sum()
             mean_dot = np.sum(z[trg_indices] * xw[src_indices]) / len(src_indices)
             delta_w = np.linalg.norm(w - wprev)
-            stats = Stats(w_dot=w_dot, mean_dot=mean_dot, delta_w=delta_w, current_vocab=current_vocab, len_match=len(matches))
+            stats = Stats(w_dot=w_dot, mean_dot=mean_dot, delta_w=delta_w, current_vocab=current_vocab, len_match=len(src_indices))
 
-        if it > 1 and stats.len_match < pstats.len_match:
-            current_vocab = min(int(current_vocab * 1.1), args.vocabulary_cutoff)
+        if it > 1 and stats.w_dot < pstats.w_dot:
+            current_vocab = min(int(current_vocab * 1.05), args.vocabulary_cutoff)
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
@@ -283,10 +311,16 @@ def main():
         cum_weights = collections.Counter()
         matches, objective = find_matches(xw, zw, cum_weights, score, ul=current_vocab, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
 
+        for m in decided:
+            decided[m] = decided[m]*(1-1/it)
+
         for m in score:
-            decided[m] += score[m] / 4
-        for m in matches:
-            decided[m] += matches[m] / 4
+            if m in score:
+                eta = 1/it
+            else:
+                eta = max(0.2, 1/it)
+            decided[m] = decided[m]*(1-eta) + score[m]*eta/2 + matches[m]*eta/2
+
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())
@@ -298,7 +332,7 @@ def main():
         with open(f'{OUTPUTDIR}/{args.dictname}.{it}', mode='w') as f:
             for p in decided.most_common():
                 si, ti = p[0]
-                print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]/it:.3f}', file=f)
+                print(f'{src_words[si]}\t{trg_words[ti]}\t{p[1]:.3e}', file=f)
 
         # Logging
         duration = time.time() - t
