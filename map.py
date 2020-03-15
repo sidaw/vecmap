@@ -250,7 +250,7 @@ def main():
     t = time.time()
     wprev = 0
     current_vocab = args.init_vocab
-    Stats = collections.namedtuple('MatchStats', ['w_dot', 'mean_dot', 'delta_w', 'current_vocab'])
+    Stats = collections.namedtuple('MatchStats', ['w_dot', 'mean_dot', 'delta_w', 'current_vocab', 'len_match'])
     pstats = None
     stats = None
     while True:
@@ -272,10 +272,10 @@ def main():
             w_dot = np.sum(weights * z[trg_indices] * xw[src_indices]) / weights.sum()
             mean_dot = np.sum(z[trg_indices] * xw[src_indices]) / len(src_indices)
             delta_w = np.linalg.norm(w - wprev)
-            stats = Stats(w_dot=w_dot, mean_dot=mean_dot, delta_w=delta_w, current_vocab=current_vocab)
+            stats = Stats(w_dot=w_dot, mean_dot=mean_dot, delta_w=delta_w, current_vocab=current_vocab, len_match=len(matches))
 
-        if it > 1 and stats.w_dot <= pstats.w_dot + 1e-6:
-            current_vocab = min(int(current_vocab * 1.05), args.vocabulary_cutoff)
+        if it > 1 and stats.len_match < pstats.len_match:
+            current_vocab = min(int(current_vocab * 1.1), args.vocabulary_cutoff)
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1
@@ -284,9 +284,9 @@ def main():
         matches, objective = find_matches(xw, zw, cum_weights, score, ul=current_vocab, T=T, kbest=args.corekbest, csls=args.csls_neighborhood, decay=args.decayrate)
 
         for m in score:
-            decided[m] += score[m] / 2
+            decided[m] += score[m] / 4
         for m in matches:
-            decided[m] += matches[m]
+            decided[m] += matches[m] / 4
         # Accuracy and similarity evaluation in validation
         if args.validation is not None:
             src = list(validation.keys())
