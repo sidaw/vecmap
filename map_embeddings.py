@@ -69,7 +69,6 @@ def main():
     recommended_type.add_argument('--supervised', metavar='DICTIONARY', help='recommended if you have a large training dictionary')
     recommended_type.add_argument('--semi_supervised', metavar='DICTIONARY', help='recommended if you have a small seed dictionary')
     recommended_type.add_argument('--identical', action='store_true', help='recommended if you have no seed dictionary but can rely on identical words')
-    recommended_type.add_argument('--identical_custom', action='store_true', help='identical without self')
     recommended_type.add_argument('--unsupervised', action='store_true', help='recommended if you have no seed dictionary and do not want to rely on identical words')
     recommended_type.add_argument('--acl2018', action='store_true', help='reproduce our ACL 2018 system')
     recommended_type.add_argument('--aaai2018', metavar='DICTIONARY', help='reproduce our AAAI 2018 system')
@@ -117,8 +116,6 @@ def main():
         parser.set_defaults(init_dictionary=args.semi_supervised, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
     if args.identical:
         parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
-    if args.identical_custom:
-        parser.set_defaults(init_identical=True, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=False, vocabulary_cutoff=50000, csls_neighborhood=0)
     if args.unsupervised or args.acl2018:
         parser.set_defaults(init_unsupervised=True, unsupervised_vocab=4000, normalize=['unit', 'center', 'unit'], whiten=True, src_reweight=0.5, trg_reweight=0.5, src_dewhiten='src', trg_dewhiten='trg', self_learning=True, vocabulary_cutoff=20000, csls_neighborhood=10)
     if args.aaai2018:
@@ -175,6 +172,12 @@ def main():
     trg_indices = []
     if args.init_unsupervised:
         sim_size = min(x.shape[0], z.shape[0]) if args.unsupervised_vocab <= 0 else min(x.shape[0], z.shape[0], args.unsupervised_vocab)
+
+        src_top = src_words[:sim_size]
+        trg_top = trg_words[:sim_size]
+        iden_top = set(src_top) & set(trg_top)
+        print(f'using top {sim_size} words, {len(iden_top)} are the same')
+
         u, s, vt = xp.linalg.svd(x[:sim_size], full_matrices=False)
         xsim = (u*s).dot(u.T)
         u, s, vt = xp.linalg.svd(z[:sim_size], full_matrices=False)

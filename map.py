@@ -188,6 +188,8 @@ def main():
             open(args.trg_input, encoding=args.encoding, errors='surrogateescape') as trgfile:
         src_words, x = embeddings.read(srcfile, dtype=dtype, threshold=args.vocabulary_cutoff, vocabulary=vocabulary)
         trg_words, z = embeddings.read(trgfile, dtype=dtype, threshold=args.vocabulary_cutoff)
+        embeddings.normalize(x, args.normalize)
+        embeddings.normalize(z, args.normalize) 
     # NumPy/CuPy management
     if args.cuda:
         if not supports_cupy():
@@ -203,10 +205,6 @@ def main():
     # Build word to index map
     src_word2ind = {word: i for i, word in enumerate(src_words)}
     trg_word2ind = {word: i for i, word in enumerate(trg_words)}
-
-    # STEP 0: Normalization
-    embeddings.normalize(x, args.normalize)
-    embeddings.normalize(z, args.normalize)
 
     # Build the seed dictionary
     src_indices = []
@@ -283,6 +281,8 @@ def main():
     stats = None
     while True:
         src_indices, trg_indices, weights = flatten_match(matches, matches)
+        # x, z = np.array(x0), np.array(z0)
+        
         embeddings.noise(x)
         embeddings.noise(z)
 
@@ -303,7 +303,7 @@ def main():
             stats = Stats(w_dot=w_dot, mean_dot=mean_dot, delta_w=delta_w, current_vocab=current_vocab, len_match=len(src_indices))
 
         if it > 1 and stats.w_dot < pstats.w_dot:
-            current_vocab = min(int(current_vocab * 1.05), args.vocabulary_cutoff)
+            current_vocab = min(int(current_vocab * 1.1), args.vocabulary_cutoff)
 
         T = 1 * np.exp((it - 1) * np.log(1e-2) / (args.maxiter))
         # T = 1

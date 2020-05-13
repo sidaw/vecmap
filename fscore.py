@@ -22,11 +22,13 @@ def readdict(f):
             d[s].add(t)
     return d
 
-def readpreds(f, k=3, thres=0.3, maxgap=0.3):
+def readpreds(f, k=3, thres=0.3, maxgap=0.3, reverse=False):
     d = collections.defaultdict(lambda: collections.Counter())
     maxval = collections.Counter()
     for line in f:
         s, t, score = line.split('\t')[:3]
+        if reverse:
+            s, t = t, s
         score = float(score)
         if score > maxval[s]:
             maxval[s] = score
@@ -56,14 +58,15 @@ def main():
     parser.add_argument('--encoding', default='utf-8', help='the character encoding for input/output (defaults to utf-8)')
     parser.add_argument('--k', default=2, type=int, help='the max amount of predictions per word')
     parser.add_argument('--thres', default=0.3, type=float, help='the threshold')
-    parser.add_argument('--maxgap', default=10, type=float, help='the maximum gap with the biggest')
+    parser.add_argument('--maxgap', default=float('inf'), type=float, help='the maximum gap with the biggest')
     parser.add_argument('--predmode', action='store_true', help='output in source order instead of confidence order')
+    parser.add_argument('--reversepred', action='store_true', help='do the other direction of the language pair')
     args = parser.parse_args()
 
     with open(args.dictionary, encoding=args.encoding, errors='surrogateescape') as f:
         ref = readdict(f)
     with open(args.translations, encoding=args.encoding, errors='surrogateescape') as f:
-        trans, scores = readpreds(f, args.k, args.thres, args.maxgap)
+        trans, scores = readpreds(f, args.k, args.thres, args.maxgap, reverse=args.reversepred)
 
     def precision(testd, refd, tag='FP'):
         stats = []
@@ -97,7 +100,7 @@ def main():
         for s in ref:
             for tscore in scores[s].most_common():
                 t, score = tscore
-                print(f'{s}\t{t}\t{score}')
+                print(f'{s}\t{t}')
         return
 
     for s in allstats:
