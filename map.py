@@ -89,33 +89,6 @@ def flatten_match(matches, cum_weights, dtype='float32'):
     src_indices, trg_indices = [list(a) for a in zip(*indices)]
     return src_indices, trg_indices, weights
 
-from collections import Counter
-def sharpen(ssharp, niters=5):
-    for _ in range(niters):
-        s1sum = Counter()
-        s2sum = Counter()
-        for ij in ssharp:
-            i, j = ij
-            s1sum[i] += ssharp[i, j]
-
-        for ij in ssharp:
-            i, j = ij
-            ssharp[ij] = ssharp[ij] / (s1sum[i] + 1e-2)
-
-        for ij in ssharp:
-            ssharp[ij] = np.power(ssharp[ij], 1.5)
-        
-        for ij in ssharp:
-            i, j = ij
-            s2sum[j] += ssharp[i, j]
-
-        for ij in ssharp:
-            i, j = ij
-            ssharp[ij] = ssharp[ij] / (s2sum[j] + 1e-2)
-        for ij in ssharp:
-            ssharp[ij] = np.power(ssharp[ij], 1.5)
-
-
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Map word embeddings in two languages into a shared space')
@@ -263,7 +236,7 @@ def main():
         matches[p] = 1
         decided[p] = 1
     identical = set(src_words).intersection(set(trg_words))
-    for word in identical:
+    for word in list(identical):
         p = (src_word2ind[word], trg_word2ind[word])
         matches[p] = 1
         decided[p] = 1
